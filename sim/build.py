@@ -38,7 +38,9 @@ def main():
     src = {path: (ROOT / path).read_text(encoding="utf-8") for path in SOURCES}
     src["simbridge.py"] = (SIM / "simbridge.py").read_text(encoding="utf-8")
     payload = json.dumps(src, ensure_ascii=False).replace("</", "<\\/")
-    html = (SIM / "template.html").read_text(encoding="utf-8").replace("/*__PYSRC__*/", payload)
+    preset = json.dumps((SIM / "preset.txt").read_text(encoding="utf-8"), ensure_ascii=False).replace("</", "<\\/")
+    html = (SIM / "template.html").read_text(encoding="utf-8").replace("/*__PYSRC__*/", payload) \
+        .replace("/*__PRESET__*/", preset)
     if DIST.exists():
         shutil.rmtree(DIST)
     (DIST / "pyodide").mkdir(parents=True)

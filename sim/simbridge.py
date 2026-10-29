@@ -42,10 +42,12 @@ class Sim:
             "defaults": DEFAULTS, "labels": LABELS, "hints": HINTS, "groups": GROUPS, "counties": COUNTIES,
         }, ensure_ascii=False)
 
-    def say(self, user_id: int, text: str, reply_to: int | None = None) -> str:
+    def say(self, user_id: int, text: str, reply_to: int | None = None, tag: str = "") -> str:
         user = MEMBERS[int(user_id)]
         raw, mentions, roles = self._mentions(text)
         mid = self._add(author=user.id, text=raw, reply_to=reply_to)
+        if tag:
+            self._msg(mid)["tag"] = tag
         reply_bot = reply_to if reply_to and self._msg(reply_to) and self._msg(reply_to)["author"] == BOT_ID else None
         actions = self.core.handle(Incoming(user, raw, CHANNEL, mid, mentions, roles, reply_bot), self.now)
         self._msg(mid)["intent"] = intent_summary(self.core.last_intent, TZ)
@@ -96,6 +98,16 @@ class Sim:
         self.store.save_settings(DEFAULTS)
         self.store.save_settings({"weather_county": "臺北市"})
         return self.state(note="設定已恢復預設。")
+
+    def divider(self, text: str) -> str:
+        """批次測試的分段標題（不是訊息，bot 不會回）。"""
+        self._add(author=0, text=text)
+        return self.state()
+
+    def restart(self, start_ms: float) -> str:
+        """清空並把時間設到指定時刻（批次測試要固定起點，結果才能重現）。"""
+        self.__init__(start_ms)
+        return self.state()
 
     def clear(self) -> str:
         now = self.now

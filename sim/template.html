@@ -122,6 +122,10 @@ button { cursor: pointer; }
 fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 10px; }
 legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
 .toast { font-size: 13px; color: var(--ok); }
+.batch { width: 100%; min-height: 280px; border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 8px; font-size: 13px; }
+.divider { display: flex; align-items: center; gap: 10px; margin: 14px 0 4px; font-size: 13px; font-weight: 700; color: var(--accent); }
+.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.casetag { font-family: var(--font-mono); font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .report textarea { width: 100%; min-height: 160px; border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 8px; font-size: 13px; }
 .flagitem { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
 .flagitem .said { font-weight: 500; }
@@ -161,6 +165,7 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
       <button data-view="rem">提醒</button>
       <button data-view="notes">記事</button>
       <button data-view="settings">設定</button>
+      <button data-view="batch">批次</button>
       <button data-view="report">回報</button>
     </nav>
   </header>
@@ -186,6 +191,7 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
         <button data-view="rem">提醒</button>
         <button data-view="notes">記事</button>
         <button data-view="settings">設定</button>
+        <button data-view="batch">批次</button>
         <button data-view="report">回報</button>
       </div>
 
@@ -227,6 +233,18 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
         <div class="toast" id="settingsToast" aria-live="polite"></div>
       </div>
 
+      <div class="pane" data-pane="batch" hidden>
+        <h3>批次測試</h3>
+        <p>一行一句，會以「你」的身分依序送出。<code># 開頭</code>的行是分段標題；行首的編號（例如 <code>12.</code>）會變成句子旁的標籤。</p>
+        <div class="field">
+          <label for="batchStart">起始時間（固定起點，結果才能跟 Claude 的回報對得上）</label>
+          <input type="datetime-local" id="batchStart" value="2026-10-29T18:00">
+        </div>
+        <textarea id="batchText" class="batch" aria-label="批次句子"></textarea>
+        <button class="primary" id="batchRun" type="button">清空並依序送出</button>
+        <div class="toast" id="batchToast" aria-live="polite"></div>
+      </div>
+
       <div class="pane report" data-pane="report" hidden>
         <h3>判斷錯誤回報</h3>
         <p>在聊天裡按句子下面的「判斷錯了」就會收進這裡。每句寫下你原本的意思，再按「複製」把全部貼給 Claude，我會改規則、加進測試。</p>
@@ -248,6 +266,7 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
   </div>
 </div>
 
+<script type="application/json" id="preset">/*__PRESET__*/</script>
 <script type="application/json" id="pysrc">/*__PYSRC__*/</script>
 <script src="pyodide/python_stdlib.js"></script>
 <script src="pyodide/pyodide.js"></script>
@@ -258,6 +277,7 @@ const COLORS = { 1: "#c76a12", 2: "#2f8f6b", 3: "#a14fbf", 1000: "#3d55c9" };
 const EXAMPLES = ["明天下午3點提醒我交報告", "10分鐘後叫我關火", "每天早上8點提醒我吃藥", "提醒 @小明 下週三 交作業",
   "計時 1 分鐘", "我想看 葬送的芙莉蓮", "記住 靈感：會唱歌的貓", "我有哪些提醒", "我想看什麼", "天氣", "說明"];
 
+const PRESET = JSON.parse(document.getElementById("preset").textContent);
 let sim, info, state, me = 1, replyTo = null;
 const flags = new Map();   // 訊息 id → {said, got, expect}
 
@@ -299,6 +319,7 @@ function drawLog() {
   let lastDate = null, html = "";
   for (const m of state.messages) {
     if (m.ephemeral_for && m.ephemeral_for !== me) continue;
+    if (m.author === 0) { html += `<div class="divider">${esc(m.text)}</div>`; continue; }
     if (m.date !== lastDate) { html += `<div class="day">${esc(m.date)}</div>`; lastDate = m.date; }
     const isBot = m.author === 1000;
     const pinged = m.ping && new RegExp(`<@${me}>|<@&(${info.members.find(x => x.id === me).roles.join("|") || "x"})>`).test(m.text);
@@ -318,7 +339,7 @@ function drawLog() {
       <div class="avatar" style="background:${COLORS[m.author] || "#777"}" aria-hidden="true">${esc(String(nameOf(m.author)).slice(0, 1).toUpperCase())}</div>
       <div style="min-width:0">${refHtml}
         <div class="who"><b class="${isBot ? "botname" : ""}">${esc(String(nameOf(m.author)))}</b>${isBot ? '<span class="tagbot">BOT</span>' : ""}
-          <time>${esc(m.time)}</time>${m.ephemeral_for ? '<span class="eph">只有你看得到</span>' : ""}
+          <time>${esc(m.time)}</time>${m.tag ? `<span class="casetag">${esc(m.tag)}</span>` : ""}${m.ephemeral_for ? '<span class="eph">只有你看得到</span>' : ""}
           ${isBot && !m.ephemeral_for ? `<button class="act" data-reply="${m.id}">回覆</button>` : ""}</div>
         <div class="text">${render(shown)}</div>${btns}${intent}
       </div></article>`;
@@ -368,7 +389,7 @@ function drawFlags() {
   updateReport();
 }
 function updateReport() {
-  const lines = [...flags.values()].map((f, i) => `${i + 1}. 「${f.said}」\n   bot 判斷：${f.got}\n   我的意思：${f.expect || "（還沒寫）"}`);
+  const lines = [...flags.values()].map((f, i) => `${f.tag || i + 1 + "."} 「${f.said}」\n   bot 判斷：${f.got}\n   我的意思：${f.expect || "（還沒寫）"}`);
   $("#reportText").value = lines.length ? `jvs 判斷錯誤回報（測試台時間 ${state.now_label}）\n\n${lines.join("\n")}` : "";
 }
 
@@ -407,7 +428,7 @@ function wire() {
     if (f) {
       const id = +f.dataset.flag, m = state.messages.find(x => x.id === id);
       if (flags.has(id)) flags.delete(id);
-      else flags.set(id, { said: m.text.replace(/^<@1000>\s*/, "").replace(/<@(\d+)>/g, (_, i) => "@" + nameOf(i)), got: `${m.intent.label}｜${m.intent.detail}`, expect: "" });
+      else flags.set(id, { tag: m.tag || "", said: m.text.replace(/^<@1000>\s*/, "").replace(/<@(\d+)>/g, (_, i) => "@" + nameOf(i)), got: `${m.intent.label}｜${m.intent.detail}`, expect: "" });
       drawLog(); drawFlags();
     }
   });
@@ -428,6 +449,30 @@ function wire() {
   $("#saveSettings").addEventListener("click", () => { call("save_settings", readSettings()); $("#settingsToast").textContent = state.note; });
   $("#resetSettings").addEventListener("click", () => { call("reset_settings"); $("#settingsForm").dataset.ready = ""; drawSettings(); $("#settingsToast").textContent = state.note; });
   for (const b of $$("#tabs button, #sideTabs button")) b.addEventListener("click", () => setView(b.dataset.view));
+  $("#batchText").value = PRESET;
+  $("#batchRun").addEventListener("click", () => {
+    const n = runBatch($("#batchText").value, $("#batchStart").value);
+    $("#batchToast").textContent = `已送出 ${n} 句。`;
+    setView("chat");
+  });
+}
+
+function runBatch(text, startLocal) {
+  const start = startLocal ? new Date(startLocal + ":00+08:00").getTime() : Date.now();
+  flags.clear();
+  state = JSON.parse(sim.restart(start));
+  let n = 0;
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line || /^#\s*=+\s*$/.test(line)) continue;
+    if (line.startsWith("#")) { state = JSON.parse(sim.divider(line.replace(/^#+\s*/, ""))); continue; }
+    const m = line.match(/^(\d+)[.、)]\s*(.+)$/);
+    state = JSON.parse(sim.say(1, m ? m[2] : line, null, m ? "#" + m[1] : ""));
+    n++;
+  }
+  draw();
+  const log = $("#log"); log.scrollTop = 0;
+  return n;
 }
 
 // 標準函式庫包在 python_stdlib.js 裡；Pyodide 要下載 python_stdlib.zip 時直接給它
@@ -458,9 +503,7 @@ async function boot() {
     info = JSON.parse(sim.info());
     wire();
     state = JSON.parse(sim.state());
-    // 示範：一開始先放兩句，讓畫面不是空的
-    call("say", 1, "明天下午3點提醒我交報告");
-    call("say", 1, "我想看 葬送的芙莉蓮");
+    runBatch(PRESET, "2026-10-29T18:00");
     $("#loading").hidden = true;
   } catch (err) {
     $("#loadErr").hidden = false;
