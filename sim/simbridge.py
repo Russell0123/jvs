@@ -33,6 +33,7 @@ class Sim:
         self.core = Assistant(self.store, TZ, owner_id=1, home_channel_id=CHANNEL)     # 「你」是 bot 的主人
         self.now = datetime.fromtimestamp(start_ms / 1000, TZ).replace(second=0, microsecond=0)
         self.messages: list[dict] = []
+        self.fake_rain: int | None = None      # 假預報：幾點開始下雨（None = 不下雨）
         self.next_id = 1
         self.store.save_settings({"weather_county": "臺北市"})
 
@@ -110,6 +111,11 @@ class Sim:
         self.store.save_settings({k: DEFAULTS[k] for k in (REPLY_KEYS if page == "replies" else SETTING_KEYS)})
         return self.state(note="已恢復預設")
 
+    def set_rain(self, hour: int) -> str:
+        """改假預報：今天幾點開始下雨（-1 = 不下雨）。下一次檢查（每 40 分鐘）就會發現變化。"""
+        self.fake_rain = None if int(hour) < 0 else int(hour)
+        return self.state(note="已改預報")
+
     def divider(self, text: str) -> str:
         """批次測試的分段標題（不是訊息，bot 不會回）。"""
         self._add(author=0, text=text)
@@ -167,6 +173,7 @@ class Sim:
             "settings": self.store.settings(),
             "next_event": (lambda t: timeparse.fmt_dt(t, TZ) if t else None)(self.core.next_event_at(self.now)),
             "note": note,
+            "fake_rain": self.fake_rain,
         }, ensure_ascii=False)
 
     # ---------- 內部 ----------
@@ -213,6 +220,8 @@ class Sim:
             if isinstance(a, Send):
                 mid = self._add(BOT_ID, a.text, reply_to=a.reply_to, buttons=a.buttons, ping=a.ping,
                                 channel=a.channel_id or CHANNEL)
+                if a.embed:
+                    self._msg(mid)["embed"] = a.embed
                 if a.reminder_id:
                     self.core.sent(a.reminder_id, mid, a.channel_id)
             elif isinstance(a, Edit):
@@ -225,36 +234,11 @@ class Sim:
                     if a.clear_buttons:
                         m["buttons"] = []
             elif isinstance(a, NeedWeather):
-                periods = fake_periods(self.now)
-                if a.post:
-                    text = self.core.weather_text(a.county, periods, self.now).replace(
-                        "-# 中央氣象署", "-# 測試用假資料")
-                    self._add(BOT_ID, text, reply_to=a.reply_to, channel=a.channel_id or CHANNEL)
-                if a.rain_check:
-                    self._run(self.core.rain_check(periods, self.now))
-
+                b = weather.demo_bundle(self.now, a.county, a.town, rain_from=self.fake_rain, week=a.need_week)
+                self._run(self.core.weather_result(a, b, self.now))
 
 def target_name(t: str) -> str:
     kind, _, tid = t.partition(":")
     if kind == "r":
         return "@" + ROLES.get(int(tid), tid)
     return "@" + MEMBERS.get(int(tid), User(0, tid)).name
-
-
-def fake_periods(now: datetime) -> list:
-    """假的 36 小時預報，時段跟氣象署一樣切（06／18 點）。"""
-    local = now.astimezone(TZ)
-    day = local.replace(minute=0, second=0, microsecond=0)
-    if 6 <= local.hour < 18:
-        start = day.replace(hour=6)
-    elif local.hour >= 18:
-        start = day.replace(hour=18)
-    else:
-        start = (day - timedelta(days=1)).replace(hour=18)
-    samples = [("多雲短暫陣雨", 60, 21, 26, "舒適"), ("多雲", 20, 19, 23, "稍有寒意至舒適"),
-               ("晴時多雲", 10, 20, 27, "舒適")]
-    out = []
-    for i, (wx, pop, lo, hi, ci) in enumerate(samples):
-        s = start + timedelta(hours=12 * i)
-        out.append(weather.Period(start=s, end=s + timedelta(hours=12), wx=wx, pop=pop, min_t=lo, max_t=hi, ci=ci))
-    return out

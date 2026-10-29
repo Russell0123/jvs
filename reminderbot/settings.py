@@ -29,10 +29,10 @@ DEFAULTS: dict = {
     "note_phrases": "記起來了。\n好，我記著。\n收好了。",
     "fire_phrases": "該{text}囉。\n別忘了{text}。\n{text}的時間到了。\n你之前交代我的事來了：{text}",
     "nag_phrases": "{text}還沒弄喔？\n還記得{text}嗎？\n提醒你一下：{text}",
-    "rain_advice": "帶把傘吧☔\n有曬衣服的話記得收。\n今天別跟天空賭運氣。",
-    "hot_advice": "記得補充水分。\n注意避暑。\n今天有點曬。",
-    "cold_advice": "可以帶個外套。\n今天偏涼。\n別穿太少。",
-    "nice_advice": "天氣不錯，適合出門。\n今天舒服。\n出去走走吧。",
+    "rain_advice": "帶把傘吧☔\n有曬衣服的話記得收。\n{day}別跟天空賭運氣。",
+    "hot_advice": "記得補充水分。\n注意避暑。\n{day}有點曬。",
+    "cold_advice": "可以帶個外套。\n{day}偏涼。\n別穿太少。",
+    "nice_advice": "天氣不錯，適合出門。\n{day}很舒服。\n出去走走吧。",
     "done_phrases": "👍\n好～\n辛苦了",
     "timer_phrases": "好，{duration}後叫你。\n開始計時⏱️",
     "rain_confirm_phrases": "好，下雨天叫你。\nOK，會下雨再跟你說。",
@@ -40,6 +40,10 @@ DEFAULTS: dict = {
     "payday_set_phrases": "記住了，每月 {day} 號。",
     "draft_cancel_phrases": "好，先不設。\nOK，那先不提醒。",
     "no_target_phrases": "現在沒有在響的提醒耶。",
+    "location_phrases": "好，改看{place}的天氣。\n收到，你在{place}。",
+    "alert_phrases": "{hour}點後可能{what}\n注意，{hour}點後可能{what}",
+    "rain_yes_phrases": "{when}可能下雨，降雨 {pop}%。\n{when}會下雨喔，{pop}%。",
+    "rain_no_phrases": "{when}應該不會下雨。\n{when}看起來不會下雨。",
     "not_found_phrases": "找不到耶。",
     "unknown_phrases": "嗯？沒聽懂😅\n這句我還不會耶。\n換個說法試試？",
     "show_exact_time": False,         # 回覆下面用小字附上實際時間（預設關；按「查看」看得到）
@@ -83,6 +87,14 @@ DEFAULTS: dict = {
     "weather_daily_time": "07:30",
     "weather_county": "臺北市",
     "weather_rain_threshold": 50,    # 降雨機率超過多少提醒帶傘，也是「下雨天提醒我」的門檻
+    "weather_slot_hours": "8,12,16,20",   # 卡片上列哪幾個時段
+    "weather_slot_day": "auto",      # 看哪一天：auto（第一個時段之前看今天，之後看明天）／today／tomorrow
+    "weather_hot": 32,               # 最高溫幾度以上算熱
+    "weather_cold": 16,              # 最低溫幾度以下算冷
+    "weather_alert_enabled": True,   # 預報變成會下雨時通知
+    "weather_check_minutes": 40,
+    "weather_alert_hours": 12,       # 看未來幾小時
+    "weather_quiet": "23:00-07:00",  # 這段時間不通知（等結束後再說）
 
     # 願望清單：聊天裡說「我想畫…」「之後想買…」「有點想追…」就自動記下來
     # 一行一個清單：「清單名稱：動詞,動詞」
@@ -123,7 +135,7 @@ LABELS = {
     "rain_confirm_phrases": "設好下雨天提醒", "payday_ask_phrases": "問發薪日", "payday_set_phrases": "記住發薪日 {day}",
     "draft_cancel_phrases": "不設了", "no_target_phrases": "沒有可延後的", "not_found_phrases": "找不到",
     "unknown_phrases": "聽不懂",
-    "rain_advice": "下雨", "hot_advice": "很熱", "cold_advice": "偏冷", "nice_advice": "舒服",
+    "rain_advice": "叮嚀：下雨 {day}", "hot_advice": "叮嚀：很熱 {day}", "cold_advice": "叮嚀：偏冷 {day}", "nice_advice": "叮嚀：舒服 {day}",
     "topics": "名稱｜關鍵字｜回覆｜時間到（多個用 / 隔開）",
     "show_exact_time": "回覆附上實際時間",
     "btn_done_label": "完成", "btn_later_label": "晚點", "btn_later_minutes": "晚點＝幾分鐘後",
@@ -134,6 +146,12 @@ LABELS = {
     "nag_enabled": "沒按「好」會再催", "nag_interval_minutes": "間隔（分鐘）", "nag_max": "最多幾次",
     "weather_daily_enabled": "每天貼天氣", "weather_daily_time": "幾點", "weather_county": "縣市",
     "weather_rain_threshold": "降雨機率 % 算下雨",
+    "weather_slot_hours": "卡片時段（逗號分隔）", "weather_slot_day": "看哪天（auto／today／tomorrow）",
+    "weather_hot": "幾度以上算熱", "weather_cold": "幾度以下算冷",
+    "weather_alert_enabled": "預報變成會下雨時通知", "weather_check_minutes": "幾分鐘檢查一次",
+    "weather_alert_hours": "看未來幾小時", "weather_quiet": "不通知的時段",
+    "location_phrases": "改地點 {place}", "alert_phrases": "天氣變化 {hour} {what}",
+    "rain_yes_phrases": "會下雨嗎→會 {when} {pop}", "rain_no_phrases": "會下雨嗎→不會 {when}",
     "note_categories": "記事分類（分類：關鍵字,關鍵字）", "wish_lists": "願望清單（清單：動詞,動詞）",
     "wish_listen_ids": "沒 @ 也聽誰（ID，空白＝只有你）", "passive_ack": "沒 @ 時回一句",
     "suggest_count": "一次挑幾個", "suggest_half_life_days": "近期加成半衰期（天）",
@@ -148,7 +166,9 @@ GROUPS = [
     ("時間", ["date_only_time", "time_morning", "time_noon", "time_afternoon", "time_evening", "time_night",
             "few_days", "payday"]),
     ("再催", ["nag_enabled", "nag_interval_minutes", "nag_max"]),
-    ("天氣", ["weather_daily_enabled", "weather_daily_time", "weather_county", "weather_rain_threshold"]),
+    ("天氣", ["weather_daily_enabled", "weather_daily_time", "weather_county", "weather_rain_threshold",
+            "weather_slot_hours", "weather_slot_day", "weather_hot", "weather_cold"]),
+    ("天氣變化通知", ["weather_alert_enabled", "weather_check_minutes", "weather_alert_hours", "weather_quiet"]),
     ("清單", ["wish_lists", "wish_listen_ids", "passive_ack", "suggest_count", "suggest_half_life_days",
             "note_categories"]),
     ("其他", ["show_exact_time"]),
@@ -162,7 +182,8 @@ REPLY_GROUPS = [
     ("延後", ["snooze_phrases", "snooze_when_phrases", "no_target_phrases"]),
     ("取消／完成", ["cancel_phrases", "cancel_all_phrases", "done_phrases", "draft_cancel_phrases", "not_found_phrases"]),
     ("清單", ["wish_acks", "note_phrases", "suggest_phrases", "payday_set_phrases"]),
-    ("天氣建議", ["rain_advice", "hot_advice", "cold_advice", "nice_advice"]),
+    ("天氣", ["rain_advice", "hot_advice", "cold_advice", "nice_advice", "rain_yes_phrases", "rain_no_phrases",
+            "alert_phrases", "location_phrases"]),
     ("常見提醒", ["topics"]),
     ("其他", ["unknown_phrases"]),
 ]
@@ -267,6 +288,13 @@ def validate(form: dict, keys=None) -> tuple[dict, list[str]]:
             else:
                 errors.append(f"{k} 格式要像 07:30")
                 out[k] = default
+        elif k == "weather_slot_day":
+            out[k] = raw if raw in ("auto", "today", "tomorrow") else default
+        elif k == "weather_slot_hours":
+            hours = [x for x in re.split(r"[,，\s]+", raw) if x.isdigit() and 0 <= int(x) <= 23]
+            out[k] = ",".join(hours) if hours else default
+        elif k == "weather_quiet":
+            out[k] = raw if re.fullmatch(r"\d{1,2}:\d{2}-\d{1,2}:\d{2}", raw) or raw == "" else default
         elif k == "weather_county":
             out[k] = raw if raw in COUNTIES else default
         elif k in MULTILINE_KEYS:

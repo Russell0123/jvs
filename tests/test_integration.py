@@ -1,7 +1,6 @@
 """core.Assistant 的完整流程（兩種 store 各跑一次，確保測試網頁和正式上線行為一致），以及設定網頁。"""
-import json
+import random
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -43,7 +42,7 @@ class Chat:
             elif isinstance(a, Edit):
                 if a.clear_buttons:
                     self.msgs[a.message_id].buttons = []
-            elif isinstance(a, NeedWeather):
+            elif isinstance(a, NeedWeather) and a.purpose != "monitor":   # 背景的天氣變化檢查另外測
                 out.append((None, a))
         return out
 
@@ -163,17 +162,61 @@ def test_weather_intent_and_daily(core):
     assert chat.tick(morning + timedelta(minutes=1)) == []            # 一天只貼一次
 
 
-def test_weather_always_has_advice(core):
-    data = json.loads(Path(__file__).with_name("fixtures_weather.json").read_text())
-    periods = weather.parse(data, "臺北市", TZ)
-    text = core.weather_text("臺北市", periods, T0)
-    assert any(a in text for a in ["帶把傘", "曬衣服", "賭運氣"])        # 降雨 60% → 下雨建議
-    hot = [weather.Period(p.start, p.end, "晴", 0, 28, 35, "") for p in periods]
-    text = core.weather_text("臺北市", hot, T0)
-    assert any(a in text for a in ["補充水分", "避暑", "有點曬"])
-    cold = [weather.Period(p.start, p.end, "陰", 0, 12, 15, "") for p in periods]
-    text = core.weather_text("臺北市", cold, T0)
-    assert any(a in text for a in ["外套", "偏涼", "穿太少"])
+def test_weather_card_and_advice(core):
+    b = weather.demo_bundle(T0, "臺北市", rain_from=15)
+    nw = NeedWeather("臺北市", CH, reply_to=5, rain_q=True, mode="today")
+    [send] = core.weather_result(nw, b, T0)
+    card = send.embed
+    assert card["title"].endswith("臺北市信義區") and card["description"] == "現在 **多雲 24°C**"
+    assert [f["name"][:5] for f in card["fields"][:4]] == ["08:00", "12:00", "16:00", "20:00"]
+    assert card["fields"][4]["name"].startswith("今天 ") and "°C" in card["fields"][4]["name"]
+    assert any(a in card["fields"][4]["value"] for a in ["帶把傘", "曬衣服", "賭運氣"])   # 會下雨 → 叮嚀帶傘
+    assert send.text.startswith("今天15點後")                                         # 「會下雨嗎」直接回答
+    dry = weather.demo_bundle(T0, "臺北市", rain_from=None)
+    [send] = core.weather_result(NeedWeather("臺北市", CH, rain_q=True, mode="tomorrow"), dry, T0)
+    assert "不會下雨" in send.text and send.embed["fields"][4]["name"].startswith("明天")
+    hot = weather.demo_bundle(T0, "臺北市", rain_from=None)
+    for x in hot.slots:
+        x.temp = 35.0
+    assert any(a in core.day_card(hot, T0.date(), T0, core.store.settings(), random.Random(1))["fields"][4]["value"]
+               for a in ["補充水分", "避暑", "有點曬"])
+    wk = weather.demo_bundle(T0, "臺北市", week=True)
+    [send] = core.weather_result(NeedWeather("臺北市", CH, mode="weekend"), wk, T0)
+    assert send.embed["title"].endswith("週末") and len(send.embed["fields"]) == 2 and send.embed["description"]
+
+
+def test_weather_routes_and_location(core):
+    chat = Chat(core)
+    [(_, w)] = chat.say(ME, "台中天氣")
+    assert isinstance(w, NeedWeather) and w.county == "臺中市"
+    assert chat.say(ME, "我討厭下雨")[0][1].__class__ is Send                     # 不是天氣
+    chat.say(ME, "我在高雄市苓雅區")
+    [(_, w)] = chat.say(ME, "明天會下雨嗎")
+    assert (w.county, w.town, w.mode, w.rain_q) == ("高雄市", "苓雅區", "tomorrow", True)
+    [(_, w)] = chat.say(ME, "下週天氣如何")
+    assert w.need_week
+
+
+def test_weather_daily_and_monitor():
+    core = Assistant(MemoryStore(), TZ, owner_id=7, home_channel_id=CH)
+    core.store.set_meta("loc:7", {"county": "臺中市", "town": "西屯區"})
+    acts = core.tick(T0, CH)
+    mon = [a for a in acts if isinstance(a, NeedWeather)]
+    assert mon[0].purpose == "monitor" and mon[0].county == "臺中市"
+    assert not [a for a in core.tick(T0 + timedelta(minutes=10), CH) if isinstance(a, NeedWeather)]   # 40 分鐘一次
+    dry, wet = weather.demo_bundle(T0, "臺中市", rain_from=None), weather.demo_bundle(T0, "臺中市", rain_from=21)
+    assert core.weather_result(mon[0], dry, T0) == []                       # 第一次只記下來
+    assert core.weather_result(mon[0], dry, T0 + timedelta(minutes=40)) == []
+    [alert] = core.weather_result(mon[0], wet, T0 + timedelta(minutes=80))
+    assert alert.ping and "<@7>" in alert.text and "21點後可能下雨" in alert.embed["description"]
+    assert core.weather_result(mon[0], wet, T0 + timedelta(minutes=120)) == []   # 同一段不重複通知
+    night = datetime(2026, 10, 29, 23, 30, tzinfo=TZ)                       # 安靜時段
+    assert core.weather_result(mon[0], weather.demo_bundle(night, "臺中市", rain_from=None), night) == []
+    morning = datetime(2026, 10, 30, 7, 31, tzinfo=TZ)
+    daily = [a for a in core.tick(morning, CH) if isinstance(a, NeedWeather) and a.purpose == "daily"]
+    assert daily and daily[0].mode == "today"
+    [card] = core.weather_result(daily[0], weather.demo_bundle(morning, "臺中市", rain_from=None), morning)
+    assert card.embed["fields"][4]["name"].startswith("今天")
 
 
 def test_settings_change_behavior(core):
@@ -187,12 +230,29 @@ def test_settings_change_behavior(core):
     assert "關著" in chat.say(ME, "計時 5 分鐘")[0][1].text
 
 
-def test_weather_parse():
-    data = json.loads(Path(__file__).with_name("fixtures_weather.json").read_text())
-    periods = weather.parse(data, "臺北市", TZ)
-    assert periods[0].pop == 60 and periods[0].max_t == 26
-    report = weather.format_report("臺北市", periods, T0, "帶把傘吧☔")
-    assert "今天白天" in report and report.splitlines()[-2] == "帶把傘吧☔"
+def test_weather_parse_both_formats():
+    old = {"records": {"locations": [{"location": [{"locationName": "信義區", "weatherElement": [
+        {"elementName": "Wx", "time": [{"startTime": "2026-10-29 15:00:00", "endTime": "2026-10-29 18:00:00",
+                                        "elementValue": [{"value": "短暫陣雨", "measures": ""}, {"value": "08"}]}]},
+        {"elementName": "T", "time": [{"dataTime": "2026-10-29 15:00:00", "elementValue": [{"value": "25"}]}]},
+        {"elementName": "PoP6h", "time": [{"startTime": "2026-10-29 12:00:00", "endTime": "2026-10-29 18:00:00",
+                                           "elementValue": [{"value": "60"}]}]}]}]}]}}
+    new = {"records": {"Locations": [{"Location": [{"LocationName": "大安區"}, {"LocationName": "信義區", "WeatherElement": [
+        {"ElementName": "天氣現象", "Time": [{"StartTime": "2026-10-29T15:00:00+08:00", "EndTime": "2026-10-29T18:00:00+08:00",
+                                          "ElementValue": [{"Weather": "短暫陣雨", "WeatherCode": "08"}]}]},
+        {"ElementName": "溫度", "Time": [{"DataTime": "2026-10-29T15:00:00+08:00", "ElementValue": [{"Temperature": "25"}]}]},
+        {"ElementName": "3小時降雨機率", "Time": [{"StartTime": "2026-10-29T15:00:00+08:00",
+                                              "EndTime": "2026-10-29T18:00:00+08:00",
+                                              "ElementValue": [{"ProbabilityOfPrecipitation": "60"}]}]}]}]}]}}
+    for data in (old, new):
+        [x] = weather.parse_forecast(data, "信義區", TZ)
+        assert (x.start.hour, x.wx, x.temp, x.pop) == (15, "短暫陣雨", 25.0, 60)
+    cur = {"records": {"Station": [{"StationName": "臺北", "GeoInfo": {"CountyName": "臺北市"},
+                                    "ObsTime": {"DateTime": "2026-10-29T14:00:00+08:00"},
+                                    "WeatherElement": {"Weather": "多雲", "AirTemperature": 24.3}}]}}
+    c = weather.parse_current(cur, "臺北市", TZ)
+    assert (c.station, c.wx, c.temp) == ("臺北", "多雲", 24.3)
+    assert weather.icon("多雲短暫陣雨") == "🌧️" and weather.icon("晴") == "☀️" and weather.icon("午後雷陣雨") == "⛈️"
 
 
 async def test_web_auth_and_settings(tmp_path):
@@ -321,8 +381,7 @@ def test_rain_and_payday(core):
     morning = datetime(2026, 10, 30, 7, 31, tzinfo=TZ)
     [(_, w)] = chat.tick(morning)
     assert isinstance(w, NeedWeather) and w.rain_check
-    from sim.simbridge import fake_periods
-    sent = chat.run(core.rain_check(fake_periods(morning), morning))
+    sent = chat.run(core.rain_check(weather.demo_bundle(morning, "臺北市", rain_from=7), morning))
     assert "雨衣" in sent[0][1].text
 
     [(_, q)] = chat.say(ME, "發薪日提醒我存錢")

@@ -74,6 +74,7 @@ class Send:
     ping: bool = False                          # True 才真的 @ 到人
     reply_to: int | None = None                 # 回覆哪則訊息
     reminder_id: int | None = None              # 送出後要記下 message_id（呼叫 core.sent）
+    embed: dict | None = None                   # 卡片：title / description / fields / color / footer
 
 
 @dataclass
@@ -87,11 +88,24 @@ class Edit:
 
 @dataclass
 class NeedWeather:
+    """請轉接層去抓天氣，抓到後呼叫 core.weather_result（失敗呼叫 core.weather_error）。"""
     county: str
-    channel_id: int | None                      # None = 預設頻道（每日天氣）
+    channel_id: int | None                      # None = 提醒頻道
     reply_to: int | None = None
-    post: bool = True                           # 要不要把天氣貼出來
-    rain_check: bool = False                    # 查完要呼叫 core.rain_check（下雨天提醒）
+    purpose: str = "show"                       # show（有人問）／daily（每天早上）／monitor（檢查變化）
+    town: str = ""
+    mode: str = ""                              # today / tomorrow / week / weekend / ""（自動）
+    rain_q: bool = False                        # 問「會不會下雨」
+    rain_check: bool = False                    # 順便檢查下雨天提醒
+    post: bool = True                           # daily：要不要貼出來
+
+    @property
+    def need_current(self) -> bool:
+        return self.purpose != "monitor"
+
+    @property
+    def need_week(self) -> bool:
+        return self.mode in ("week", "weekend")
 
 
 @dataclass
@@ -342,7 +356,13 @@ class Assistant:
         if it.kind == "weather":
             if not s["feature_weather"]:
                 return reply("天氣功能關著喔。")
-            return [NeedWeather(it.county or s["weather_county"], msg.channel_id, reply_to=msg.message_id)]
+            county, town = (it.county, it.town) if it.county else self.location(msg.author.id, s)
+            return [NeedWeather(county, msg.channel_id, reply_to=msg.message_id, town=town, mode=it.mode,
+                                rain_q=it.rain)]
+
+        if it.kind == "location":
+            self.store.set_meta(f"loc:{msg.author.id}", {"county": it.county, "town": it.town})
+            return reply(self.phrase(s, "location_phrases", rng, place=it.county + it.town))
 
         return reply(self.phrase(s, "unknown_phrases", rng))
 
@@ -731,6 +751,7 @@ class Assistant:
                                 ping=True, reminder_id=rem["id"]))
 
         if s["feature_weather"]:
+            county, town = self.location(self.owner_id, s)
             has_rain = any(r["kind"] == "rain" for r in self.store.all_reminders(("pending",)))
             local = now.astimezone(self.tz)
             h, m = map(int, s["weather_daily_time"].split(":"))
@@ -738,34 +759,179 @@ class Assistant:
             if (s["weather_daily_enabled"] or has_rain) and target <= local < target + timedelta(minutes=30) \
                     and self.store.get_meta("weather_sent") != local.date().isoformat():
                 self.store.set_meta("weather_sent", local.date().isoformat())
-                actions.append(NeedWeather(s["weather_county"], default_channel_id,
+                actions.append(NeedWeather(county, default_channel_id, purpose="daily", town=town, mode="today",
                                            post=bool(s["weather_daily_enabled"]), rain_check=has_rain))
+            last = self.store.get_meta("weather_checked", 0) or 0
+            if s["weather_alert_enabled"] and ts - last >= int(s["weather_check_minutes"]) * 60:
+                self.store.set_meta("weather_checked", ts)
+                actions.append(NeedWeather(county, default_channel_id, purpose="monitor", town=town))
         return actions
 
     # ---------- 天氣 ----------
-    def weather_text(self, county: str, periods: list, now: datetime) -> str:
-        """天氣一定附一句行動建議（下雨帶傘、熱就補水、冷就加外套）。"""
+    def location(self, user_id: int | None, s: dict) -> tuple[str, str]:
+        """這個人說過自己在哪；沒說過就用設定的縣市。"""
+        loc = self.store.get_meta(f"loc:{user_id}") if user_id else None
+        return (loc["county"], loc.get("town", "")) if loc else (s["weather_county"], "")
+
+    def weather_result(self, nw: NeedWeather, b, now: datetime) -> list:
+        """轉接層抓到天氣（weather.Bundle）之後呼叫。"""
         s = self.store.settings()
         rng = random.Random(int(now.timestamp()))
-        first, today = periods[0], periods[:2]
-        if max(p.pop for p in today) >= int(s["weather_rain_threshold"]):
-            advice = self.phrase(s, "rain_advice", rng)
-        elif max(p.max_t for p in today) >= 32:
-            advice = self.phrase(s, "hot_advice", rng)
-        elif min(p.min_t for p in today) <= 16:
-            advice = self.phrase(s, "cold_advice", rng)
-        else:
-            advice = self.phrase(s, "nice_advice", rng)
-        return weather.format_report(county, periods, now, advice) if first else advice
+        channel = nw.channel_id or self.home_channel_id
+        if nw.purpose == "monitor":
+            return self._weather_monitor(b, now, s, rng, channel)
+        out = []
+        if nw.purpose == "daily":
+            if nw.post:
+                out.append(Send(channel, "", embed=self.day_card(b, now.astimezone(self.tz).date(), now, s, rng)))
+            if nw.rain_check:
+                out += self.rain_check(b, now)
+            return out
+        if nw.need_week and b.week:
+            return [Send(channel, "", reply_to=nw.reply_to, embed=self.week_card(b, nw.mode == "weekend", now, s, rng))]
+        day = self._card_day(nw.mode, now, s)
+        text = self._rain_answer(b, day, now, s, rng) if nw.rain_q else ""
+        return [Send(channel, text, reply_to=nw.reply_to, embed=self.day_card(b, day, now, s, rng))]
 
-    def rain_check(self, periods: list, now: datetime) -> list:
-        """每天看完預報後呼叫：今天會下雨就把「下雨天提醒」送出去。"""
+    def weather_error(self, nw: NeedWeather, err: str) -> list:
+        if nw.purpose != "show":
+            return []
+        return [Send(nw.channel_id or self.home_channel_id, f"🌧️ 天氣查不到：{err}", reply_to=nw.reply_to)]
+
+    def _card_day(self, mode: str, now: datetime, s: dict):
+        local = now.astimezone(self.tz)
+        rule = mode if mode in ("today", "tomorrow") else s["weather_slot_day"]
+        if rule == "auto":
+            first = min(int(h) for h in str(s["weather_slot_hours"]).split(","))
+            rule = "today" if local.hour < first else "tomorrow"
+        return local.date() + timedelta(days=1 if rule == "tomorrow" else 0)
+
+    def _day_label(self, day, now: datetime) -> str:
+        diff = (day - now.astimezone(self.tz).date()).days
+        return {0: "今天", 1: "明天", 2: "後天"}.get(diff, f"{day.month}/{day.day}")
+
+    def _advice(self, slots: list, s: dict, rng, day: str = "今天") -> tuple[str, int]:
+        """一句叮嚀＋卡片顏色。"""
+        if any(weather.is_rain(x, int(s["weather_rain_threshold"])) for x in slots):
+            return self.phrase(s, "rain_advice", rng, day=day), 0x4A90D9
+        temps = [v for x in slots for v in (x.temp, x.max_t, x.min_t) if v is not None]
+        if temps and max(temps) >= int(s["weather_hot"]):
+            return self.phrase(s, "hot_advice", rng, day=day), 0xE8833A
+        if temps and min(temps) <= int(s["weather_cold"]):
+            return self.phrase(s, "cold_advice", rng, day=day), 0x4FB3BF
+        return self.phrase(s, "nice_advice", rng, day=day), 0x5CB85C
+
+    def day_card(self, b, day, now: datetime, s: dict, rng) -> dict:
+        """現在天氣＋某一天四個時段＋整天溫度範圍＋一句叮嚀。"""
+        hours = [int(h) for h in str(s["weather_slot_hours"]).split(",") if h.strip().isdigit()]
+        fields, used = [], []
+        for h in hours:
+            at = datetime.combine(day, time(h, 0), self.tz)
+            x = weather.slot_at(b.slots, at)
+            if x:
+                used.append(x)
+                temp = f"{x.temp:.0f}°C" if x.temp is not None else ""
+                pop = f" ☔{x.pop}%" if x.pop is not None else ""
+                fields.append({"name": f"{h:02d}:00 {weather.icon(x.wx)}", "value": f"{x.wx or '—'}\n{temp}{pop}",
+                               "inline": True})
+            else:
+                fields.append({"name": f"{h:02d}:00", "value": "—", "inline": True})
+        day_slots = [x for x in b.slots if x.start.date() == day] or used
+        advice, color = self._advice(day_slots, s, rng, self._day_label(day, now))
+        rng_t = weather.day_range(b.slots, day)
+        span = f" {rng_t[0]:.0f}–{rng_t[1]:.0f}°C" if rng_t else ""
+        fields.append({"name": f"{self._day_label(day, now)}{span}", "value": advice, "inline": False})
+        cur = b.current
+        now_line = ""
+        if cur and (cur.wx or cur.temp is not None):
+            now_line = "現在 **" + " ".join(p for p in (cur.wx, f"{cur.temp:.0f}°C" if cur.temp is not None else "") if p) + "**"
+        head = cur.wx if cur and cur.wx else (used[0].wx if used else "")
+        return {"title": f"{weather.icon(head)} {b.place}", "description": now_line, "fields": fields,
+                "color": color, "footer": "中央氣象署"}
+
+    def week_card(self, b, weekend: bool, now: datetime, s: dict, rng=None) -> dict:
+        days = weather.week_days(b.week)
+        if weekend:
+            days = [d for d in days if d[0].weekday() >= 5][:2] or days
+        names = "一二三四五六日"
+        fields = [{"name": f"週{names[d.weekday()]} {d.month}/{d.day} {weather.icon(wx)}",
+                   "value": f"{wx or '—'}\n" + (f"{lo:.0f}–{hi:.0f}°C" if lo is not None else "")
+                            + (f" ☔{pop}%" if pop is not None else ""), "inline": True}
+                  for d, wx, lo, hi, pop in days[:7]]
+        shown = {d for d, *_ in days[:7]}
+        advice, color = self._advice([x for x in b.week if x.start.date() in shown], s, rng or random.Random(0),
+                                     "週末" if weekend else "這幾天")
+        return {"title": f"📅 {b.place}{' 週末' if weekend else ' 一週'}", "description": advice, "fields": fields,
+                "color": color, "footer": "中央氣象署"}
+
+    def _rain_answer(self, b, day, now: datetime, s: dict, rng) -> str:
+        """「明天會下雨嗎」：直接回答，下面再附卡片。"""
+        label = self._day_label(day, now)
+        th = int(s["weather_rain_threshold"])
+        rainy = [x for x in b.slots if x.start.date() == day and x.end > now and weather.is_rain(x, th)]
+        if not rainy:
+            return self.phrase(s, "rain_no_phrases", rng, when=label)
+        first = rainy[0]
+        return self.phrase(s, "rain_yes_phrases", rng, when=f"{label}{hour_label(first.start.hour)}點後",
+                           pop=max(x.pop or 0 for x in rainy))
+
+    def _quiet(self, now: datetime, s: dict) -> bool:
+        q = str(s.get("weather_quiet", "")).strip()
+        if not q:
+            return False
+        a, b = [time(*map(int, x.split(":"))) for x in q.split("-")]
+        t = now.astimezone(self.tz).time()
+        return (a <= t or t < b) if a > b else (a <= t < b)
+
+    def _weather_monitor(self, b, now: datetime, s: dict, rng, channel: int) -> list:
+        """跟上次記下的預報比：未來 N 小時內，有時段從「不會下雨」變成「可能下雨」或出現雷雨等狀況，就通知。"""
+        if self._quiet(now, s):
+            return []           # 安靜時段先不比（也不更新紀錄），等結束後再一起比
+        th = int(s["weather_rain_threshold"])
+        snap = self.store.get_meta("wx_snap") or {}
+        alerted = set(self.store.get_meta("wx_alerted") or [])
+        horizon = now + timedelta(hours=int(s["weather_alert_hours"]))
+        changed = []
+        for x in b.slots:
+            key = x.start.isoformat()
+            rain, sp = weather.is_rain(x, th), weather.special(x)
+            old = snap.get(key)
+            if old is not None and x.end > now and x.start < horizon and key not in alerted:
+                if (rain and not old[0]) or (sp and sp != old[1]):
+                    changed.append((x, sp))
+            snap[key] = [rain, sp]
+        cutoff = (now - timedelta(days=1)).isoformat()
+        self.store.set_meta("wx_snap", {k: v for k, v in snap.items() if k >= cutoff})
+        if not changed:
+            return []
+        alerted |= {x.start.isoformat() for x, _ in changed}
+        self.store.set_meta("wx_alerted", sorted(k for k in alerted if k >= cutoff))
+        first, sp = changed[0]
+        what = f"有{sp}" if sp else "下雨"
+        line = self.phrase(s, "alert_phrases", rng, hour=hour_label(first.start.astimezone(self.tz).hour), what=what)
+        fields = [{"name": f"{x.start.astimezone(self.tz):%H:%M} {weather.icon(x.wx)}",
+                   "value": f"{x.wx or '—'}" + (f" ☔{x.pop}%" if x.pop is not None else ""), "inline": True}
+                  for x, _ in changed[:6]]
+        owner = f"<@{self.owner_id}> " if self.owner_id else ""
+        return [Send(channel, owner.strip(), ping=True, embed={
+            "title": f"⚠️ 天氣變化・{b.place}", "description": line, "fields": fields, "color": 0xE0A100,
+            "footer": "中央氣象署"})]
+
+    def weather_text(self, b, now: datetime) -> str:
+        """卡片的純文字版（沒有卡片可以顯示時用）。"""
+        card = self.day_card(b, self._card_day("", now, self.store.settings()), now, self.store.settings(),
+                             random.Random(0))
+        return embed_text(card)
+
+    def rain_check(self, b, now: datetime) -> list:
+        """每天早上看完預報後呼叫：今天會下雨就把「下雨天提醒」送出去。"""
         s = self.store.settings()
         today = now.astimezone(self.tz).date()
-        pops = [p.pop for p in periods if p.start.date() <= today <= p.end.date()] or [p.pop for p in periods[:2]]
-        pop = max(pops) if pops else 0
-        if pop < int(s["weather_rain_threshold"]):
+        th = int(s["weather_rain_threshold"])
+        rainy = [x for x in b.slots if x.start.date() == today and weather.is_rain(x, th)]
+        if not rainy:
             return []
+        pop = max(x.pop or 0 for x in rainy)
         ts, actions = int(now.timestamp()), []
         for rem in self.store.all_reminders(("pending",)):
             if rem["kind"] != "rain":
@@ -876,6 +1042,17 @@ class Assistant:
                 times.append((r["fired_at"] or 0) + iv)
         future = [t for t in times if t > now.timestamp()]
         return datetime.fromtimestamp(min(future), self.tz) if future else None
+
+
+def hour_label(h: int) -> str:
+    """0 點講成「半夜12」，其他照講（後面會接「點」）。"""
+    return "半夜12" if h == 0 else str(h)
+
+
+def embed_text(card: dict) -> str:
+    lines = [f"**{card['title']}**"] + ([card["description"]] if card.get("description") else [])
+    lines += [f"{f['name']}｜{f['value'].replace(chr(10), ' ')}" for f in card.get("fields", [])]
+    return "\n".join(lines)
 
 
 def can_touch(rem: dict, user: User) -> bool:

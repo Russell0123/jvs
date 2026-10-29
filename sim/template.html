@@ -75,6 +75,16 @@ code { font-family: var(--font-mono); font-size: 12px; }
 .mention { background: var(--mention); color: var(--mention-fg); border-radius: 4px; padding: 0 3px; font-weight: 500; }
 .replyto { font-size: 12px; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .replyto::before { content: "↱ "; }
+.card { margin-top: 4px; max-width: 520px; border-left: 4px solid var(--c, var(--accent)); background: var(--surface-2);
+  border-radius: 6px; padding: 8px 12px; display: grid; gap: 4px; }
+.card .ct { font-weight: 700; }
+.card .cd { font-size: 14px; }
+.card .cf { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px 10px; }
+.card .fd { min-width: 0; font-size: 13px; }
+.card .fd.wide { grid-column: 1 / -1; }
+.card .fn { font-weight: 700; font-size: 12px; }
+.card .fv { white-space: pre-wrap; }
+.card .ft { font-size: 11px; color: var(--muted); }
 .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .btns button { border: 1px solid var(--line); border-radius: 6px; padding: 2px 12px; font-size: 14px; background: var(--surface-2); }
 .btns button.success { background: var(--ok); color: #fff; border-color: var(--ok); }
@@ -198,6 +208,9 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
         </div>
 
         <div class="pane" data-pane="settings" hidden>
+          <div class="item"><b style="font-size:13px">假預報（測試天氣變化通知）</b>
+            <div class="inline"><span class="hint">今天</span><select id="rainHour" aria-label="幾點開始下雨"></select><button class="ghost" id="rainSet" type="button">套用</button></div>
+            <div class="hint" id="rainNow"></div></div>
           <form id="settingsForm" class="list"></form>
           <div class="actions"><button class="primary" type="button" data-save="settings">套用</button><button class="ghost" type="button" data-reset="settings">恢復預設</button><span class="toast" id="settingsToast"></span></div>
         </div>
@@ -205,7 +218,7 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
         <div class="pane" data-pane="batch" hidden>
           <div class="inline"><input type="datetime-local" id="batchStart" value="2026-10-29T18:00" aria-label="起始時間"><button class="primary" id="batchRun" type="button">清空並送出</button></div>
           <textarea id="batchText" rows="14" aria-label="批次句子"></textarea>
-          <div class="hint"><code># 標題</code> <code>12. 編號</code> <code>⏩ 30分鐘</code> <code>~ 不@</code> <code>[小明] 換人</code> <code>↩關鍵字：回覆</code> <code>【閒聊】換頻道</code></div>
+          <div class="hint"><code># 標題</code> <code>12. 編號</code> <code>⏩ 30分鐘</code> <code>~ 不@</code> <code>[小明] 換人</code> <code>↩關鍵字：回覆</code> <code>【閒聊】換頻道</code> <code>☔ 21 假預報</code></div>
           <div class="sec-title">判斷錯的句子</div>
           <div class="list" id="flagList"></div>
           <textarea id="reportText" rows="5" readonly aria-label="回報內容"></textarea>
@@ -288,11 +301,20 @@ function drawLog() {
       <div style="min-width:0">${ref ? `<div class="replyto">${esc(nameOf(ref.author))}：${esc(plain(ref.text).slice(0, 50))}</div>` : ""}
         <div class="who"><b class="${isBot ? "bot" : ""}">${esc(nameOf(m.author))}</b><span class="chan c${m.channel}">#${esc((info.channels.find(c => c.id === m.channel) || {}).name || "")}</span><time>${esc(m.time)}</time>${m.tag ? `<span class="tag">${esc(m.tag)}</span>` : ""}${m.ephemeral_for ? '<span class="tag">只有你看得到</span>' : ""}
           ${isBot && !m.ephemeral_for ? `<button class="act" data-reply="${m.id}">回覆</button>` : ""}</div>
-        <div class="text">${render(isBot ? m.text : m.text.replace(/^<@1000>\s*/, ""))}</div>${btns}${intent}
+        ${m.text ? `<div class="text">${render(isBot ? m.text : m.text.replace(/^<@1000>\s*/, ""))}</div>` : ""}${m.embed ? card(m.embed) : ""}${btns}${intent}
       </div></article>`;
   }
   log.innerHTML = html || `<div class="empty">還沒有訊息</div>`;
   if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+function card(e) {
+  // Discord 的 embed：左邊色條、標題、說明、欄位（inline 的排成一列）、頁尾
+  const color = e.color != null ? "#" + e.color.toString(16).padStart(6, "0") : "";
+  return `<div class="card" style="${color ? `--c:${color}` : ""}"><div class="ct">${esc(e.title || "")}</div>
+    ${e.description ? `<div class="cd">${render(e.description)}</div>` : ""}
+    <div class="cf">${(e.fields || []).map(f => `<div class="fd ${f.inline ? "" : "wide"}"><div class="fn">${esc(f.name)}</div><div class="fv">${render(f.value)}</div></div>`).join("")}</div>
+    ${e.footer ? `<div class="ft">${esc(e.footer)}</div>` : ""}</div>`;
 }
 
 function drawReminders() {
@@ -411,6 +433,8 @@ function wire() {
     const pg = b.dataset.reset; call("reset_settings", pg); drawForms(); $(`#${pg}Toast`).textContent = state.note; drawLogic();
   });
 
+  $("#rainHour").innerHTML = `<option value="-1">不下雨</option>` + [...Array(24).keys()].map(h => `<option value="${h}">${h} 點開始下雨</option>`).join("");
+  $("#rainSet").addEventListener("click", () => { call("set_rain", +$("#rainHour").value); drawRain(); });
   $("#tryForm").addEventListener("submit", e => {
     e.preventDefault();
     const d = JSON.parse(sim.explain($("#tryText").value));
@@ -426,6 +450,10 @@ function wire() {
     catch { t.select(); $("#copyToast").textContent = "已選取，請手動複製"; }
   });
 }
+function drawRain() {
+  $("#rainNow").textContent = state.fake_rain == null ? "目前：不下雨。改了之後，下一次檢查（40 分鐘內）就會通知。" : `目前：今天 ${state.fake_rain} 點開始下雨`;
+  $("#rainHour").value = state.fake_rain == null ? -1 : state.fake_rain;
+}
 function drawForms() { drawForm($("#replyForm"), info.reply_groups); drawForm($("#settingsForm"), info.groups); }
 
 function runBatch(text, startLocal) {
@@ -435,6 +463,12 @@ function runBatch(text, startLocal) {
     const line = raw.trim();
     if (!line || /^#\s*=+\s*$/.test(line)) continue;
     if (line.startsWith("#")) { state = JSON.parse(sim.divider(line.replace(/^#+\s*/, ""))); continue; }
+    const rain = line.match(/^☔\s*(\d+|不下雨)/);
+    if (rain) {
+      state = JSON.parse(sim.set_rain(rain[1] === "不下雨" ? -1 : +rain[1]));
+      state = JSON.parse(sim.divider(rain[1] === "不下雨" ? "☔ 假預報：不下雨" : `☔ 假預報：${rain[1]} 點開始下雨`));
+      continue;
+    }
     const ff = line.match(/^⏩\s*(\d+)\s*(分鐘|分|小時|天)?/);
     if (ff) {
       state = JSON.parse(sim.divider(`⏩ ${ff[1]} ${ff[2] || "分鐘"}`));
@@ -473,7 +507,7 @@ async function boot() {
     info = JSON.parse(sim.info());
     wire();
     state = JSON.parse(sim.state());
-    drawForms(); drawLogic(); setPane("rem"); setView("chat");
+    drawForms(); drawLogic(); setPane("rem"); setView("chat"); drawRain();
     runBatch(PRESET, "2026-10-29T18:00");
     $("#loading").hidden = true;
   } catch (err) {

@@ -16,6 +16,10 @@ HELP_RE = r"^\s*(help|說明|幫助|怎麼用|使用說明|指令|功能|你會�
 REMINDER_RE = r"^\s*記得|提醒|叫我|叫醒|通知我|問我|記得要|記得叫|別忘了|不要忘記|別讓我忘|跟我說"
 NOTE_RE = r"幫我記住|記住|記一下|記下來|記下|幫我記|記起來|收著|存起來|筆記一下"
 WEATHER_RE = r"天氣|下雨|氣溫|溫度|帶傘|幾度|冷不冷|熱不熱"
+# 有「天氣」兩個字，或是在問問題（「我討厭下雨」不算）
+WEATHER_ASK_RE = r"天氣|嗎|呢|\?|？|會不會|要不要|幾度|多少度|冷不冷|熱不熱|帶傘|如何|怎樣"
+WEATHER_WEEK_RE = r"下週|下禮拜|下星期|這週|本週|這禮拜|一週|一周|未來幾天|這幾天|週末|周末"
+LOCATION_RE = r"我\s*(?:現在|目前|人|這幾天|最近|今天)?\s*(?:人在|在|住在|住|搬到|搬去|到了|來到|待在)\s*(.+)"
 TIMER_RE = r"計時|倒數|碼表"
 LIST_RE = (r"列出|列表|清單|有哪些|有什麼|有啥|查看|查詢|看一下|全部的|所有的|我的(提醒|記事|筆記|備忘)"
            r"|(什麼|啥|哪些)\s*[?？]?\s*$")
@@ -107,6 +111,8 @@ class Intent:
     ids: list[int] = field(default_factory=list)
     scope: str = ""                 # list／cancel_match 用：reminders / notes / all
     county: str | None = None
+    town: str = ""                  # 鄉鎮區（天氣、改地點）
+    mode: str = ""                  # 天氣：today / tomorrow / week / weekend（空白＝自動）
     error: str | None = None
     ask: str = ""                   # 需要問時間：event（看事件）／vague（太模糊）／none（沒講）
     event: str = ""                 # 例如「吃完飯」
@@ -160,8 +166,16 @@ def route(text: str, now: datetime, settings: dict) -> Intent:
         return Intent("timer", seconds=secs, text=label)
 
     is_reminder_word = bool(rv)
-    if re.search(WEATHER_RE, text) and not is_reminder_word:
-        return Intent("weather", county=find_county(text))
+    if (m := re.search(LOCATION_RE, text)) and not is_reminder_word and (county := find_county(m.group(1))):
+        return Intent("location", county=county, town=_town(m.group(1), county, bare=True))
+
+    if re.search(WEATHER_RE, text) and re.search(WEATHER_ASK_RE, text) and not is_reminder_word:
+        mode = ("weekend" if re.search(r"週末|周末", text) else "week") if re.search(WEATHER_WEEK_RE, text) else \
+            "tomorrow" if re.search(r"明天|明早|明晚|明日", text) else \
+            "today" if re.search(r"今天|今日|現在|今晚|等等|待會", text) else ""
+        county = find_county(text)
+        return Intent("weather", county=county, town=_town(text, county) if county else "", mode=mode,
+                      rain=bool(re.search(r"雨|帶傘", text)))
 
     body, limits = _extract_limits(text, now)
     event = re.search(EVENT_RE, body)
@@ -370,6 +384,22 @@ def clean_reminder_text(s: str) -> str:
 def second_person(s: str) -> str:
     """提醒內容裡的「我」換成「你」（「問我有沒有出門」→「有沒有出門」已經拿掉動詞，剩下的我→你）。"""
     return s.replace("我", "你")
+
+
+def _town(text: str, county: str, bare: bool = False) -> str:
+    """「台中市西屯區」→「西屯區」；bare=True 時「台中西屯」也接受（回傳「西屯」，查預報時比對開頭）。"""
+    t = text.replace("台", "臺")
+    if county in t:
+        rest = t[t.find(county) + len(county):]
+    elif county[:2] in t:
+        rest = re.sub(r"^[市縣]", "", t[t.find(county[:2]) + 2:])
+    else:
+        return ""
+    if m := re.match(r"([\u4e00-\u9fff]{1,3}?[區鄉鎮市])", rest):
+        return m.group(1)
+    if bare and (m := re.match(r"([\u4e00-\u9fff]{2})(?:了|啦|喔|囉)?$", rest.strip())):
+        return m.group(1)
+    return ""
 
 
 def _verb(s: str) -> str:

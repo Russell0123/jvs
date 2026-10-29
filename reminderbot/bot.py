@@ -46,6 +46,16 @@ def make_view(buttons: list[Button]) -> discord.ui.View | None:
     return view
 
 
+def make_embed(card: dict) -> discord.Embed:
+    e = discord.Embed(title=card.get("title"), description=card.get("description") or None,
+                      color=card.get("color"))
+    for f in card.get("fields", []):
+        e.add_field(name=f["name"], value=f["value"] or "—", inline=f.get("inline", True))
+    if card.get("footer"):
+        e.set_footer(text=card["footer"])
+    return e
+
+
 def to_user(member: discord.abc.User) -> User:
     return User(member.id, member.display_name, {r.id for r in getattr(member, "roles", [])})
 
@@ -149,35 +159,37 @@ class ReminderBot(discord.Client):
         kwargs = {"allowed_mentions": mentions}
         if view:
             kwargs["view"] = view
+        if a.embed:
+            kwargs["embed"] = make_embed(a.embed)
+        text = a.text or None
         if source is not None and a.reply_to == source.id:
-            msg = await source.reply(a.text, mention_author=False, **kwargs)
+            msg = await source.reply(text, mention_author=False, **kwargs)
         else:
-            msg = await (await self._channel(a.channel_id)).send(a.text, **kwargs)
+            msg = await (await self._channel(a.channel_id)).send(text, **kwargs)
         if a.reminder_id:
             self.core.sent(a.reminder_id, msg.id, msg.channel.id)
 
     async def _weather(self, a: NeedWeather, source: discord.Message | None, raise_errors: bool = False):
         try:
-            periods = await weather.fetch(self.config.cwa_api_key, a.county, self.tz)
-            text = self.core.weather_text(a.county, periods, self.now())
-            if a.rain_check:
-                await self.run_actions(self.core.rain_check(periods, self.now()))
-            if not a.post:
-                return
+            b = await weather.fetch_bundle(self.config.cwa_api_key, a.county, a.town, self.tz,
+                                           need_current=a.need_current, need_week=a.need_week)
+            if b.errors:
+                log.warning("天氣部分資料沒抓到：%s", b.errors)
+            actions = self.core.weather_result(a, b, self.now())
         except weather.WeatherError as e:
             if raise_errors:
                 raise
             log.warning("天氣查詢失敗：%s", e)
-            text = f"🌧️ 天氣查不到：{e}"
-            if a.reply_to is None:      # 每日自動天氣失敗就不要洗版
-                return
-        channel_id = a.channel_id or self.config.reminder_channel_id
-        await self._send(Send(channel_id, text, reply_to=a.reply_to), source)
+            actions = self.core.weather_error(a, str(e))
+        for act in actions:
+            if isinstance(act, Send):
+                await self._send(act, source)
 
     async def post_weather_now(self):
-        """設定網頁的「現在貼一次天氣」。"""
-        s = self.store.settings()
-        await self._weather(NeedWeather(s["weather_county"], None), None, raise_errors=True)
+        """設定網頁的「貼一次天氣」。"""
+        county, town = self.core.location(self.config.owner_id, self.store.settings())
+        await self._weather(NeedWeather(county, None, purpose="daily", town=town, mode="today"), None,
+                            raise_errors=True)
 
     # ---------- 按鈕 ----------
     async def on_press(self, interaction: discord.Interaction, custom_id: str):

@@ -18,7 +18,7 @@ CACHE = SIM / ".pyodide-cache"
 PYODIDE_VERSION = "0.26.4"
 PYODIDE_FILES = ["pyodide.js", "pyodide.asm.js", "pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json"]
 # 瀏覽器裡沒有 discord.py／aiohttp，這幾個不打包；其他 reminderbot/*.py 全部塞進網頁
-SKIP = {"bot.py", "web.py", "config.py", "__main__.py"}
+SKIP = {"bot.py", "web.py", "config.py", "__main__.py", "weathercheck.py"}
 
 
 def fetch_pyodide():
