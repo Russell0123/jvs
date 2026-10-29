@@ -1,0 +1,22 @@
+[Unit]
+Description=jvs Discord 助理機器人
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jvs
+WorkingDirectory=/opt/jvs
+EnvironmentFile=/opt/jvs/.env
+ExecStart=/opt/jvs/.venv/bin/python -m reminderbot
+Restart=always
+RestartSec=5
+# 基本防護
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/jvs/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

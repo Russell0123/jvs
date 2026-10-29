@@ -1,0 +1,9 @@
+[Unit]
+Description=每天備份 jvs 資料庫
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

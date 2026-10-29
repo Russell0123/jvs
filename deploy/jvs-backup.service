@@ -1,0 +1,8 @@
+[Unit]
+Description=jvs 資料庫備份
+
+[Service]
+Type=oneshot
+User=jvs
+WorkingDirectory=/opt/jvs
+ExecStart=/bin/sh -c 'sqlite3 data/bot.db ".backup data/backups/bot-$(date +%%F).db" && find data/backups -name "bot-*.db" -mtime +14 -delete'
