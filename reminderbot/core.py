@@ -16,20 +16,23 @@ from datetime import datetime, time, timedelta
 
 from . import timeparse, weather
 from .router import REMINDER_RE, Intent, clean_reminder_text, extract_wishes, fuzzy_match, route
-from .settings import phrases, topics, wish_acks, wish_verb
+from .settings import find_county, phrases, topics, wish_acks, wish_verb
 
-HELP = """**我會做這些事**（@我 再說一句話就好，順序隨意）
-⏰ **提醒**：`明天下午3點提醒我交報告`、`這幾天提醒我訂車票`、`12點睡覺`、`半小時後喝水`
-🔁 **重複**：`每天早上8點提醒我吃藥`、`每週三和週五提醒我運動`、`每兩小時提醒我喝水`
+HELP = """**我會做這些事**
+👋 **叫我**：@賈維斯，或句子裡提到賈維斯、Jarvis
+⏰ **提醒**：`明天下午3點提醒我交報告`、`這幾天提醒我訂車票`、`12點睡覺`
+🔁 **重複**：`每天早上8點提醒我吃藥`、`每週三和週五提醒我運動`
 👥 **提醒別人**：`明天中午提醒 @某人 開會`
 ☔ **看情況**：`下雨天提醒我帶傘`、`發薪日提醒我存錢`
 ⏱️ **計時**：`計時 25 分鐘`
 🎨 **願望**：聊天時說 `我想畫…`、`想買…`，之後問 `我最近可以畫什麼`
-📝 **記住**：`記住 靈感：…`、`記一下 車停在 B2-37`
+📝 **記住**：`記住 靈感：…`
 📋 **查詢**：`我有哪些提醒`
-🗑️ **取消**：`不用再提醒我喝水了`、`取消今天所有提醒`、`取消 12`
-💤 **延後**：按按鈕，或說 `後天再提醒我`、`晚兩個小時再提醒`
-🌤️ **天氣**：`天氣`、`台中天氣`"""
+🗑️ **取消**：`不用再提醒我喝水了`、`取消今天所有提醒`
+💤 **延後**：`後天再提醒我`、`晚兩個小時再提醒`
+↩️ **回覆提醒**：`好`、`不用了`、`改成十分鐘後`
+🌤️ **天氣**：`天氣`、`明天會下雨嗎`、`我在台中`
+⌨️ **指令**：`/說明`、`/設定`、`/天氣`"""
 
 DRAFT_MINUTES = 30          # 問了時間之後，多久內回答都算數
 FAR_FUTURE = 4102444800     # 2100 年：下雨天提醒這種「看情況」的，平常不會到期
@@ -64,6 +67,7 @@ class Button:
     label: str
     emoji: str = ""
     style: str = "secondary"                    # success / secondary / danger
+    url: str = ""                               # 有網址就是連結按鈕
 
 
 @dataclass
@@ -75,6 +79,7 @@ class Send:
     reply_to: int | None = None                 # 回覆哪則訊息
     reminder_id: int | None = None              # 送出後要記下 message_id（呼叫 core.sent）
     embed: dict | None = None                   # 卡片：title / description / fields / color / footer
+    ephemeral: bool = False                     # 只有對方看得到（/ 指令）
 
 
 @dataclass
@@ -98,6 +103,7 @@ class NeedWeather:
     rain_q: bool = False                        # 問「會不會下雨」
     rain_check: bool = False                    # 順便檢查下雨天提醒
     post: bool = True                           # daily：要不要貼出來
+    ephemeral: bool = False                     # / 指令：只給對方看
 
     @property
     def need_current(self) -> bool:
@@ -186,14 +192,44 @@ class Assistant:
         return next((t for t in topics(s) if t.name == name), None) if name else None
 
     # ---------- 收訊息 ----------
+    def is_owner(self, user_id: int) -> bool:
+        return self.owner_id is None or user_id == self.owner_id
+
+    def _names_re(self, s: dict) -> str:
+        names = [n.strip() for n in re.split(r"[,，、\s]+", str(s["bot_names"])) if n.strip()]
+        return "|".join(rf"(?<![a-z]){re.escape(n)}(?![a-z])" if n.isascii() else re.escape(n)
+                        for n in sorted(names, key=len, reverse=True)) or r"(?!x)x"
+
+    def _greet_re(self, s: dict) -> str:
+        words = [w.strip() for w in re.split(r"[,，、\s]+", str(s["greet_words"])) if w.strip()]
+        return "|".join(rf"(?<![a-z]){re.escape(w)}(?![a-z])" if w.isascii() else re.escape(w)
+                        for w in sorted(words, key=len, reverse=True)) or r"(?!x)x"
+
+    def _strip_call(self, text: str, s: dict) -> str:
+        """拿掉名字和開頭的招呼：「嘿賈維斯，明天提醒我…」→「明天提醒我…」。"""
+        t = re.sub(self._names_re(s), " ", text, flags=re.I)
+        lead = rf"^[\s,，.。!！~～、]*({self._greet_re(s)})?[\s,，.。!！~～、]*"
+        prev = None
+        while prev != t:
+            prev, t = t, re.sub(lead, "", t, count=1, flags=re.I)
+        return t.strip()
+
     def handle(self, msg: Incoming, now: datetime) -> list:
         s = self.store.settings()
         text = re.sub(r"<@[!&]?\d+>", " ", msg.text).strip()
         rng = random.Random(msg.message_id or int(now.timestamp()))
+        owner = self.is_owner(msg.author.id)
+        called = bool(re.search(self._names_re(s), text, re.I))
 
-        if not msg.mentioned:
-            # 沒 @ bot：只聽指定成員的「我想畫…」這類願望，其他一律不回
+        if not msg.mentioned and not called:
             self.last_intent = None
+            # 主人回答 bot 的問句（「8點」）不用 @
+            draft = self._draft_for(msg, now) if owner else None
+            if draft and (answer := self._time_answer(text, Intent("unknown"), now, s)) is not None:
+                self.last_intent = Intent("reminder", when=answer.when, repeat=answer.repeat, text="回答時間")
+                return self._finish_draft(draft, answer.when, answer.repeat, answer.phrase(text), answer.dated,
+                                          msg.channel_id, msg.message_id, now, rng)
+            # 其他沒在叫它的：只聽指定成員的「我想畫…」這類願望
             if not (s["feature_note"] and self.listens_to(msg.author.id, s)):
                 return []
             wishes = extract_wishes(text, s)
@@ -203,25 +239,67 @@ class Assistant:
             self._save_wishes(msg.author.id, wishes, now)
             return self._reply(msg, self._wish_ack(wishes, rng)) if s["passive_ack"] else []
 
-        if msg.reply_to_bot_message_id:
-            out = self._reply_to_reminder(msg, text, now, s, rng)
+        greeted = bool(re.search(self._greet_re(s), text, re.I))
+        clean = self._strip_call(text, s)
+
+        if msg.reply_to_bot_message_id and clean:
+            out = self._reply_to_reminder(msg, clean, now, s, rng)
             if out is not None:
                 return out
 
-        it = route(text, now, s)
+        it = route(clean, now, s) if clean else Intent("unknown")
         self.last_intent = it
 
-        draft = self._draft_for(msg, now)
-        if draft:
-            if re.fullmatch(r"(算了|不用了|先不要|不要了|取消|沒事)[。！!]?", text):
+        draft = self._draft_for(msg, now) if owner else None
+        if draft and clean:
+            if re.fullmatch(r"(算了|不用了|先不要|不要了|取消|沒事)[。！!]?", clean):
                 self.store.update_reminder(draft["id"], status="cancelled")
                 return self._reply(msg, self.phrase(s, "draft_cancel_phrases", rng))
-            answer = self._time_answer(text, it, now, s)
+            answer = self._time_answer(clean, it, now, s)
             if answer:
-                self.last_intent = Intent("reminder", when=answer.when, repeat=answer.repeat, text="（回答時間）")
-                return self._finish_draft(draft, answer.when, answer.repeat, answer.phrase(text), answer.dated,
+                self.last_intent = Intent("reminder", when=answer.when, repeat=answer.repeat, text="回答時間")
+                return self._finish_draft(draft, answer.when, answer.repeat, answer.phrase(clean), answer.dated,
                                           msg.channel_id, msg.message_id, now, rng)
-        return self._dispatch(msg, it, s, now, rng)
+
+        if it.kind != "unknown":
+            if s["owner_only"] and not owner:
+                self.last_intent = Intent("refuse", text="不是主人")
+                return self._reply(msg, self.phrase(s, "refuse_phrases", rng))
+            return self._dispatch(msg, it, s, now, rng)
+        if greeted or not clean:
+            self.last_intent = Intent("greet")
+            return self._reply(msg, self.greet(s, rng))
+        if owner and msg.mentioned:
+            return self._dispatch(msg, it, s, now, rng)
+        return []           # 只是聊天提到名字，不回
+
+    def greet(self, s: dict, rng) -> str:
+        if rng.random() * 100 < float(s["greet_rare_percent"]):
+            return self.phrase(s, "greet_rare_phrases", rng)
+        return self.phrase(s, "greet_phrases", rng)
+
+    def slash(self, name: str, user: User, now: datetime, channel_id: int, arg: str = "",
+              settings_url: str = "") -> list:
+        """/ 指令：回覆只有本人看得到；不是主人就拒絕。"""
+        s = self.store.settings()
+        rng = random.Random(int(now.timestamp()))
+
+        def say_(text, buttons=None):
+            return [Send(channel_id, text, buttons or [], ephemeral=True)]
+        if s["owner_only"] and not self.is_owner(user.id):
+            return say_(self.phrase(s, "refuse_phrases", rng))
+        if name == "help":
+            return say_(HELP)
+        if name == "settings":
+            if not settings_url:
+                return say_("設定網頁還沒開，主機上跑 deploy/public-web.sh。")
+            return say_(self.phrase(s, "settings_link_phrases", rng), [Button("", "打開設定", url=settings_url)])
+        if name == "weather":
+            county = find_county(arg) if arg else None
+            county, town = (county, "") if county else self.location(user.id, s)
+            return [NeedWeather(county, channel_id, town=town, ephemeral=True,
+                                mode="tomorrow" if "明" in arg else "today" if "今" in arg else "")]
+        return say_("沒有這個指令。")
 
     def _reply_to_reminder(self, msg: Incoming, text: str, now: datetime, s: dict, rng) -> list | None:
         """回覆了 bot 的某則提醒訊息（不用 @）：取消、完成或延後「那一個」。不是這幾種就照一般判斷。"""
@@ -611,27 +689,30 @@ class Assistant:
         return "\n".join(out)[:2000]
 
     def view_text(self, rem: dict, now: datetime, user_id: int) -> str:
-        """「查看」按鈕：這個提醒接下來的時間，加上全部提醒。"""
+        """「查看」按鈕：這個提醒接下來的時間，再列其他提醒。"""
         lines = []
-        if rem["status"] in ("pending", "fired"):
-            if rem["kind"] == "rain":
-                lines.append(f"`#{rem['id']}` 下雨天・{rem['text']}")
-            elif rem["repeat"]:
-                due = datetime.fromtimestamp(rem["due_at"], self.tz)
-                times, t, until = [due], due, rem["extra"].get("until")
-                count_left = (rem["extra"].get("max_count") or 99) - rem["extra"].get("count", 0)
-                while len(times) < min(5, count_left):
-                    t = timeparse.next_occurrence(rem["repeat"], t, due.time(), self.tz)
-                    if until and t.timestamp() > until:
-                        break
-                    times.append(t)
-                lines.append(f"`#{rem['id']}` {rem['text'] or '提醒'}・{timeparse.describe_repeat(rem['repeat'])}")
-                lines += [f"・{timeparse.fmt_dt(x, self.tz)}" for x in times]
-            else:
-                lines.append(f"`#{rem['id']}` {self._when_label(rem)}・{rem['text'] or '提醒'}")
-        else:
+        if rem["status"] not in ("pending", "fired"):
             lines.append(f"`#{rem['id']}` 已經結束了")
-        return "\n".join(lines) + "\n\n" + self.list_text(user_id, "reminders", None)
+        elif rem["kind"] == "rain":
+            lines.append(f"`#{rem['id']}` 下雨天・{rem['text']}")
+        elif rem["repeat"]:
+            due = datetime.fromtimestamp(rem["due_at"], self.tz)
+            times, t, until = [due], due, rem["extra"].get("until")
+            count_left = (rem["extra"].get("max_count") or 99) - rem["extra"].get("count", 0)
+            while len(times) < min(5, count_left):
+                t = timeparse.next_occurrence(rem["repeat"], t, due.time(), self.tz)
+                if until and t.timestamp() > until:
+                    break
+                times.append(t)
+            lines.append(f"`#{rem['id']}` {rem['text'] or '提醒'}・{timeparse.describe_repeat(rem['repeat'])}")
+            lines += [f"・{timeparse.fmt_dt(x, self.tz)}" for x in times]
+        else:
+            lines.append(f"`#{rem['id']}` {self._when_label(rem)}・{rem['text'] or '提醒'}")
+        others = [r for r in self.store.user_reminders(user_id) if r["id"] != rem["id"]]
+        if others:
+            lines.append("\n**其他提醒**")
+            lines += [f"`#{r['id']}` {self._when_label(r)}・{r['text'] or '提醒'}" for r in others[:15]]
+        return "\n".join(lines)
 
     # ---------- 按鈕 ----------
     def press(self, custom_id: str, user: User, now: datetime, channel_id: int | None = None) -> PressResult:
@@ -788,10 +869,12 @@ class Assistant:
                 out += self.rain_check(b, now)
             return out
         if nw.need_week and b.week:
-            return [Send(channel, "", reply_to=nw.reply_to, embed=self.week_card(b, nw.mode == "weekend", now, s, rng))]
+            return [Send(channel, "", reply_to=nw.reply_to, ephemeral=nw.ephemeral,
+                         embed=self.week_card(b, nw.mode == "weekend", now, s, rng))]
         day = self._card_day(nw.mode, now, s)
         text = self._rain_answer(b, day, now, s, rng) if nw.rain_q else ""
-        return [Send(channel, text, reply_to=nw.reply_to, embed=self.day_card(b, day, now, s, rng))]
+        return [Send(channel, text, reply_to=nw.reply_to, ephemeral=nw.ephemeral,
+                     embed=self.day_card(b, day, now, s, rng))]
 
     def weather_wait(self, nw: NeedWeather) -> list:
         """第一輪重試都失敗、要等幾分鐘時：有人問的才先說一聲，自動的不吵。"""
@@ -804,7 +887,8 @@ class Assistant:
     def weather_error(self, nw: NeedWeather, err: str) -> list:
         if nw.purpose != "show":
             return []
-        return [Send(nw.channel_id or self.home_channel_id, f"🌧️ 天氣查不到：{err}", reply_to=nw.reply_to)]
+        return [Send(nw.channel_id or self.home_channel_id, f"🌧️ 天氣查不到：{err}", reply_to=nw.reply_to,
+                     ephemeral=nw.ephemeral)]
 
     def _card_day(self, mode: str, now: datetime, s: dict):
         local = now.astimezone(self.tz)

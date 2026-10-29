@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 
 import discord
+from discord import app_commands
 from discord.ext import tasks
 
 from . import weather
@@ -42,6 +43,9 @@ def make_view(buttons: list[Button]) -> discord.ui.View | None:
     if not buttons:
         return None
     view = discord.ui.View(timeout=None)
+    for b in [b for b in buttons if b.url]:
+        view.add_item(discord.ui.Button(label=b.label, url=b.url))
+    buttons = [b for b in buttons if not b.url]
     for b in buttons:
         view.add_item(CoreButton(b.custom_id, b.label, b.emoji, b.style))
     return view
@@ -81,6 +85,7 @@ class ReminderBot(discord.Client):
 
     async def setup_hook(self):
         self.add_dynamic_items(CoreButton)
+        self._setup_commands()
         from .web import start_web
         self.web_runner = await start_web(self)
         self.tick.start()
@@ -94,6 +99,54 @@ class ReminderBot(discord.Client):
 
     async def on_ready(self):
         log.info("已登入：%s，服務頻道：%s", self.user, self.config.channel_ids)
+        # / 指令註冊到每個伺服器（全域註冊要等很久才生效）
+        for guild in self.guilds:
+            try:
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+            except discord.HTTPException as e:
+                log.warning("/ 指令註冊失敗（%s）：%s。重新邀請 bot 時要勾 applications.commands", guild.name, e)
+
+    # ---------- / 指令 ----------
+    def _setup_commands(self):
+        self.tree = app_commands.CommandTree(self)
+
+        @self.tree.command(name="說明", description="看賈維斯會做什麼")
+        async def help_cmd(interaction: discord.Interaction):
+            await self._slash(interaction, "help")
+
+        @self.tree.command(name="設定", description="打開設定網頁")
+        async def settings_cmd(interaction: discord.Interaction):
+            await self._slash(interaction, "settings")
+
+        @self.tree.command(name="天氣", description="看天氣（只有你看得到）")
+        @app_commands.describe(地點="例如：台中、明天、台中明天（不填就看你所在地）")
+        async def weather_cmd(interaction: discord.Interaction, 地點: str = ""):
+            await self._slash(interaction, "weather", 地點)
+
+    async def _slash(self, interaction: discord.Interaction, name: str, arg: str = ""):
+        actions = self.core.slash(name, to_user(interaction.user), self.now(), interaction.channel_id or 0, arg,
+                                  self.config.public_url)
+        nw = next((a for a in actions if isinstance(a, NeedWeather)), None)
+        if nw:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            s = self.store.settings()
+            try:
+                b = await weather.fetch_with_retry(
+                    lambda: weather.fetch_bundle(self.config.cwa_api_key, nw.county, nw.town, self.tz,
+                                                 need_week=nw.need_week),
+                    int(s["weather_retries"]), float(s["weather_retry_wait"]))
+                actions = self.core.weather_result(nw, b, self.now())
+            except weather.WeatherError as e:
+                actions = self.core.weather_error(nw, str(e))
+            for a in actions:
+                kwargs = {"embed": make_embed(a.embed)} if a.embed else {}
+                await interaction.followup.send(a.text or None, ephemeral=True, **kwargs)
+            return
+        for a in actions:
+            view = make_view(a.buttons)
+            kwargs = {"view": view} if view else {}
+            await interaction.response.send_message(a.text, ephemeral=True, **kwargs)
 
     # ---------- 收訊息 ----------
     async def on_message(self, message: discord.Message):

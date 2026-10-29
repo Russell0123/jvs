@@ -30,6 +30,7 @@ USER_IN=${USER_IN:-admin}
 read -rp "設定網頁的密碼（會顯示在畫面上，打完按 Enter）：" PASS_IN
 if [[ -z "$PASS_IN" ]]; then echo "密碼不能空白"; exit 1; fi
 grep -q '^WEB_USER=' $ENV && sed -i "s|^WEB_USER=.*|WEB_USER=$USER_IN|" $ENV || echo "WEB_USER=$USER_IN" >> $ENV
+grep -q '^WEB_PUBLIC_URL=' $ENV && sed -i "s|^WEB_PUBLIC_URL=.*|WEB_PUBLIC_URL=https://$HOST|" $ENV || echo "WEB_PUBLIC_URL=https://$HOST" >> $ENV
 grep -q '^WEB_PASSWORD=' $ENV && sed -i "s|^WEB_PASSWORD=.*|WEB_PASSWORD=$PASS_IN|" $ENV || echo "WEB_PASSWORD=$PASS_IN" >> $ENV
 
 systemctl restart jvs

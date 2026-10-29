@@ -12,6 +12,10 @@ DEFAULTS: dict = {
     "feature_weather": True,
     "feature_mention_others": True,
     "all_channels": True,            # 所有頻道都聽、都回；提醒一律發到提醒頻道（CHANNEL_IDS 第一個）
+    "owner_only": True,              # 只有主人能叫它做事、用 / 指令；其他人只會跟它打招呼
+    "bot_names": "賈維斯,賈維思,賈維絲,假維斯,加維斯,賈威斯,傑維斯,jarvis,jvs",   # 講到這些名字就算在叫它
+    "greet_words": "嗨,嘿,hi,hey,hello,哈囉,你好,您好,早安,午安,晚安,安安,yo",
+    "greet_rare_percent": 5,         # 打招呼時有幾 % 機率回「稀有」那句
 
     # bot 的口吻：一行一句，每次隨機挑，最近用過的 3 句不會馬上再用
     # 規則：短句（3～12 字）、不重述你說的內容、不加括號說明
@@ -34,6 +38,10 @@ DEFAULTS: dict = {
     "cold_advice": "可以帶個外套。\n{day}偏涼。\n別穿太少。",
     "nice_advice": "天氣不錯，適合出門。\n{day}很舒服。\n出去走走吧。",
     "done_phrases": "👍\n好～\n辛苦了",
+    "greet_phrases": "嘿\n提到我嗎？\n？\n您好\n咪嗚",
+    "greet_rare_phrases": "史塔克的肛門",
+    "refuse_phrases": "我只聽主人的。\n這個沒辦法喔。\n辦不到。\n你不是我的主人🙅",
+    "settings_link_phrases": "設定在這裡：",
     "timer_phrases": "好，{duration}後叫你。\n開始計時⏱️",
     "rain_confirm_phrases": "好，下雨天叫你。\nOK，會下雨再跟你說。",
     "payday_ask_phrases": "你發薪日是幾號？",
@@ -128,6 +136,10 @@ LABELS = {
     "feature_reminder": "提醒", "feature_note": "願望清單、記事", "feature_timer": "計時",
     "feature_weather": "天氣", "feature_mention_others": "提醒別人",
     "all_channels": "所有頻道都回應（提醒發到提醒頻道）",
+    "owner_only": "只有主人能叫它做事", "bot_names": "叫它的名字（逗號分隔，含錯字）",
+    "greet_words": "打招呼的字（逗號分隔）", "greet_rare_percent": "稀有招呼機率 %",
+    "greet_phrases": "打招呼", "greet_rare_phrases": "稀有招呼", "refuse_phrases": "別人叫它做事時",
+    "settings_link_phrases": "/設定 的說明",
     "confirm_phrases": "一般", "confirm_when_phrases": "照著講時間 {when}", "confirm_other_phrases": "提醒別人 {who}",
     "repeat_phrases": "重複提醒", "ask_phrases": "一般", "ask_event_phrases": "看事件 {event}",
     "ask_vague_phrases": "太模糊 {vague}", "snooze_phrases": "一般", "snooze_when_phrases": "照著講時間 {when}",
@@ -166,6 +178,7 @@ HINTS: dict = {}
 GROUPS = [
     ("功能", ["feature_reminder", "feature_note", "feature_timer", "feature_weather", "feature_mention_others",
             "all_channels"]),
+    ("叫它", ["owner_only", "bot_names", "greet_words", "greet_rare_percent"]),
     ("按鈕", ["btn_done_label", "btn_later_label", "btn_later_minutes", "btn_tomorrow_label", "btn_tomorrow_time",
             "btn_stop_label"]),
     ("時間", ["date_only_time", "time_morning", "time_noon", "time_afternoon", "time_evening", "time_night",
@@ -191,7 +204,8 @@ REPLY_GROUPS = [
     ("天氣", ["rain_advice", "hot_advice", "cold_advice", "nice_advice", "rain_yes_phrases", "rain_no_phrases",
             "alert_phrases", "location_phrases", "weather_wait_phrases"]),
     ("常見提醒", ["topics"]),
-    ("其他", ["unknown_phrases"]),
+    ("打招呼", ["greet_phrases", "greet_rare_phrases", "refuse_phrases"]),
+    ("其他", ["unknown_phrases", "settings_link_phrases"]),
 ]
 REPLY_KEYS = [k for _, keys in REPLY_GROUPS for k in keys]
 SETTING_KEYS = [k for _, keys in GROUPS for k in keys]

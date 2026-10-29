@@ -102,7 +102,7 @@ def test_repeat_stop_button_and_view(core):
     chat = Chat(core)
     [(_, c)] = chat.say(ME, "每天下午3點提醒我喝咖啡")
     view = core.press(c.buttons[0].custom_id, ME, T0)
-    assert "10/29（四）15:00" in view.ephemeral and "10/30（五）15:00" in view.ephemeral
+    assert "10/29 週四 15:00" in view.ephemeral and "10/30 週五 15:00" in view.ephemeral
     for day in range(2):
         [(mid, f)] = chat.tick(T0 + timedelta(days=day, hours=1))
         assert "喝咖啡" in f.text and f.buttons[-1].label == "之後都取消"
@@ -535,3 +535,55 @@ async def test_web_basic_auth(tmp_path):
         assert (await client.get("/", headers=auth("me", "pw123"))).status == 200
     finally:
         await client.close()
+
+
+def test_names_greetings_and_owner_only():
+    core = Assistant(MemoryStore(), TZ, owner_id=7, home_channel_id=CH)
+    chat = Chat(core)
+    talk = lambda user, text, now=T0: chat.run(core.handle(Incoming(user, text, CH, 1, mentioned=False), now))  # noqa: E731
+    greets = set(core.store.settings()["greet_phrases"].splitlines()) | {"史塔克的肛門"}
+    [(_, r)] = talk(MING, "嘿賈維斯")
+    assert r.text in greets                                            # 任何人打招呼都會回
+    [(_, r)] = talk(MING, "Jarvis 早安")
+    assert r.text in greets
+    assert talk(MING, "賈維斯好帥") == []                                # 只是提到，沒打招呼
+    assert talk(MING, "今天天氣不錯") == []                              # 沒叫它
+    assert talk(MING, "this is fine") == []                            # 英文名字要整個字
+    [(_, r)] = talk(MING, "賈維思 提醒我寫作業")
+    assert r.text in core.store.settings()["refuse_phrases"].splitlines() and not core.store.user_reminders(8)
+    [(_, r)] = talk(ME, "嘿賈維斯 提醒我等等去洗澡")
+    rem = core.store.user_reminders(7)[0]
+    assert rem["text"] == "去洗澡" and rem["due_at"] == int((T0 + timedelta(minutes=90)).timestamp())
+    # 主人回答問句不用 @
+    talk(ME, "賈維斯 有空提醒我整理照片")
+    talk(ME, "8點", T0 + timedelta(minutes=1))
+    assert [r for r in core.store.user_reminders(7) if r["text"] == "整理照片"]
+
+
+def test_rare_greeting_rate():
+    core = Assistant(MemoryStore(), TZ, owner_id=7)
+    s = core.store.settings()
+    hits = sum(core.greet(s, random.Random(i)) == "史塔克的肛門" for i in range(2000))
+    assert 50 < hits < 160                                             # 約 5%
+
+
+def test_slash_commands():
+    core = Assistant(MemoryStore(), TZ, owner_id=7, home_channel_id=CH)
+    [h] = core.slash("help", ME, T0, 5)
+    assert h.ephemeral and "/說明" in h.text and "（" not in h.text
+    [st] = core.slash("settings", ME, T0, 5, settings_url="https://x.sslip.io")
+    assert st.buttons[0].url == "https://x.sslip.io" and st.ephemeral
+    [w] = core.slash("weather", ME, T0, 5, arg="台中明天")
+    assert isinstance(w, NeedWeather) and w.county == "臺中市" and w.mode == "tomorrow" and w.ephemeral
+    [card] = core.weather_result(w, weather.demo_bundle(T0, "臺中市"), T0)
+    assert card.ephemeral and card.embed
+    [no] = core.slash("help", MING, T0, 5)
+    assert no.ephemeral and no.text in core.store.settings()["refuse_phrases"].splitlines()
+
+
+def test_reply_reschedules_instead_of_new(core):
+    chat = Chat(core)
+    [(cid, _)] = chat.say(ME, "晚點提醒我洗澡")
+    chat.say(ME, "改成十分鐘後", reply_to=cid, now=T0 + timedelta(minutes=1))
+    rems = core.store.user_reminders(7)
+    assert len(rems) == 1 and rems[0]["due_at"] == int((T0 + timedelta(minutes=11)).timestamp())

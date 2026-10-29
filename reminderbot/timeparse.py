@@ -472,6 +472,6 @@ WEEKDAY_NAMES = "一二三四五六日"
 
 
 def fmt_dt(dt: datetime, tz) -> str:
-    """10/30（四）15:00"""
+    """10/30 週四 15:00"""
     local = dt.astimezone(tz)
-    return f"{local.month}/{local.day}（{WEEKDAY_NAMES[local.weekday()]}）{local:%H:%M}"
+    return f"{local.month}/{local.day} 週{WEEKDAY_NAMES[local.weekday()]} {local:%H:%M}"

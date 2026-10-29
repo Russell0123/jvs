@@ -31,7 +31,13 @@ def rules(s: dict) -> list[dict]:
             ("只聽指定的人", "預設只有你", []),
             ("只記願望", "其他不回", ["想", "好想", "想要", "之後想", "有點想", "想找時間", "+ 下面願望清單的動詞"]),
         ]},
-        {"title": "@ bot 時（由上往下，先符合的算）", "steps": [
+        {"title": "叫它", "steps": [
+            ("@賈維斯 或提到名字", "", [n.strip() for n in str(s["bot_names"]).split(",") if n.strip()]),
+            ("打招呼、沒交代事情", "任何人都回", [n.strip() for n in str(s["greet_words"]).split(",") if n.strip()]),
+            ("交代事情", "主人照做，別人拒絕", []),
+            ("只是提到名字", "不回", []),
+        ]},
+        {"title": "交代事情（由上往下，先符合的算）", "steps": [
             ("1. 說明", "整句", words(R.HELP_RE)),
             ("2. 設定發薪日", "", ["發薪日是／在 N 號"]),
             ("3. 用編號取消", "", words(R.CANCEL_ID_RE.split("\\s*(?:")[0])),
@@ -82,7 +88,8 @@ def describe(it, tz) -> dict | None:
         return None
     names = {"help": "說明", "reminder": "提醒", "timer": "計時", "note": "記事", "wish": "記願望", "suggest": "從清單挑",
              "weather": "天氣", "list": "查詢", "cancel": "取消提醒", "delete_note": "刪除記事",
-             "cancel_match": "用內容取消", "snooze": "延後", "payday_set": "設定發薪日", "unknown": "聽不懂"}
+             "cancel_match": "用內容取消", "snooze": "延後", "payday_set": "設定發薪日", "unknown": "聽不懂",
+             "greet": "打招呼", "refuse": "拒絕", "location": "改地點"}
     parts = []
     if it.topic:
         parts.append(f"常見提醒：{it.topic}")

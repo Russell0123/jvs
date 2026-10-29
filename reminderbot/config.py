@@ -30,6 +30,7 @@ class Config:
     web_password: str              # 有填就要輸入帳密才能進設定網頁
     owner_id: int | None           # 你的 Discord 使用者 ID：沒 @ 也會記錄你的「我想畫…」
     web_user: str = "admin"        # 設定網頁的帳號
+    public_url: str = ""           # 設定網頁的公開網址（/設定 的按鈕會連過去）
 
 
 def load() -> Config:
@@ -51,5 +52,6 @@ def load() -> Config:
         admin_email=os.environ.get("ADMIN_EMAIL", "").strip().lower(),
         web_password=os.environ.get("WEB_PASSWORD", ""),
         web_user=os.environ.get("WEB_USER", "admin").strip() or "admin",
+        public_url=os.environ.get("WEB_PUBLIC_URL", "").strip(),
         owner_id=int(os.environ["OWNER_ID"]) if os.environ.get("OWNER_ID", "").strip().isdigit() else None,
     )

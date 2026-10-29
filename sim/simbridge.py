@@ -34,6 +34,7 @@ class Sim:
         self.now = datetime.fromtimestamp(start_ms / 1000, TZ).replace(second=0, microsecond=0)
         self.messages: list[dict] = []
         self.fake_rain: int | None = None      # 假預報：幾點開始下雨（None = 不下雨）
+        self._eph: int | None = None           # / 指令的回覆只給這個人看
         self.next_id = 1
         self.store.save_settings({"weather_county": "臺北市"})
 
@@ -110,6 +111,17 @@ class Sim:
     def reset_settings(self, page: str = "settings") -> str:
         self.store.save_settings({k: DEFAULTS[k] for k in (REPLY_KEYS if page == "replies" else SETTING_KEYS)})
         return self.state(note="已恢復預設")
+
+    def slash(self, user_id: int, name: str, arg: str = "", channel: int = CHANNEL) -> str:
+        """/說明、/設定、/天氣：回覆只有本人看得到。"""
+        cmd = {"說明": "help", "設定": "settings", "天氣": "weather"}.get(name.strip("/ "), name)
+        self._eph = int(user_id)
+        try:
+            self._run(self.core.slash(cmd, MEMBERS[int(user_id)], self.now, int(channel), arg,
+                                      settings_url="https://158-179-177-8.sslip.io"))
+        finally:
+            self._eph = None
+        return self.state()
 
     def set_rain(self, hour: int) -> str:
         """改假預報：今天幾點開始下雨（-1 = 不下雨）。下一次檢查（每 40 分鐘）就會發現變化。"""
@@ -206,7 +218,7 @@ class Sim:
         self.next_id += 1
         self.messages.append({
             "id": mid, "author": author, "text": text, "reply_to": reply_to, "time": self.now.strftime("%H:%M"),
-            "date": timeparse.fmt_dt(self.now, TZ).split("）")[0] + "）",
+            "date": timeparse.fmt_dt(self.now, TZ).rsplit(" ", 1)[0],
             "buttons": [b.__dict__ for b in (buttons or [])], "ping": ping, "ephemeral_for": ephemeral_for,
             "channel": channel,
         })
@@ -219,7 +231,7 @@ class Sim:
         for a in actions:
             if isinstance(a, Send):
                 mid = self._add(BOT_ID, a.text, reply_to=a.reply_to, buttons=a.buttons, ping=a.ping,
-                                channel=a.channel_id or CHANNEL)
+                                channel=a.channel_id or CHANNEL, ephemeral_for=self._eph if a.ephemeral else None)
                 if a.embed:
                     self._msg(mid)["embed"] = a.embed
                 if a.reminder_id:

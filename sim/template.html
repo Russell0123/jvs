@@ -87,6 +87,7 @@ code { font-family: var(--font-mono); font-size: 12px; }
 .card .ft { font-size: 11px; color: var(--muted); }
 .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .btns button { border: 1px solid var(--line); border-radius: 6px; padding: 2px 12px; font-size: 14px; background: var(--surface-2); }
+.btns .btnlink { border: 1px solid var(--line); border-radius: 6px; padding: 2px 12px; font-size: 14px; background: var(--surface-2); color: var(--fg); text-decoration: none; }
 .btns button.success { background: var(--ok); color: #fff; border-color: var(--ok); }
 .btns button.danger { color: var(--danger); }
 .intent { margin-top: 2px; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
@@ -182,7 +183,7 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
           <textarea id="input" rows="1" placeholder="說點什麼…" aria-label="訊息"></textarea>
           <button class="primary" type="submit">送出</button>
         </div>
-        <div class="hint">@小明 提醒別人・按「回覆」回 bot 訊息不用 @・不勾 @jvs＝一般聊天</div>
+        <div class="hint">不勾 @jvs＝一般聊天，句子裡提到「賈維斯」也算叫它・/說明 /設定 /天氣・@小明 提醒別人</div>
       </form>
     </section>
 
@@ -218,7 +219,7 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
         <div class="pane" data-pane="batch" hidden>
           <div class="inline"><input type="datetime-local" id="batchStart" value="2026-10-29T18:00" aria-label="起始時間"><button class="primary" id="batchRun" type="button">清空並送出</button></div>
           <textarea id="batchText" rows="14" aria-label="批次句子"></textarea>
-          <div class="hint"><code># 標題</code> <code>12. 編號</code> <code>⏩ 30分鐘</code> <code>~ 不@</code> <code>[小明] 換人</code> <code>↩關鍵字：回覆</code> <code>【閒聊】換頻道</code> <code>☔ 21 假預報</code></div>
+          <div class="hint"><code># 標題</code> <code>12. 編號</code> <code>⏩ 30分鐘</code> <code>~ 不@</code> <code>[小明] 換人</code> <code>↩關鍵字：回覆</code> <code>【閒聊】換頻道</code> <code>☔ 21 假預報</code> <code>/說明</code></div>
           <div class="sec-title">判斷錯的句子</div>
           <div class="list" id="flagList"></div>
           <textarea id="reportText" rows="5" readonly aria-label="回報內容"></textarea>
@@ -292,8 +293,9 @@ function drawLog() {
     if (m.date !== lastDate) { html += `<div class="divider" style="color:var(--muted);font-weight:500">${esc(m.date)}</div>`; lastDate = m.date; }
     const isBot = m.author === 1000;
     const ref = m.reply_to && state.messages.find(x => x.id === m.reply_to);
-    const btns = m.buttons.length ? `<div class="btns">${m.buttons.map(b =>
-      `<button class="${b.style}" data-press="${esc(b.custom_id)}" data-mid="${m.id}">${esc(b.label)}</button>`).join("")}</div>` : "";
+    const btns = m.buttons.length ? `<div class="btns">${m.buttons.map(b => b.url
+      ? `<a class="btnlink" href="${esc(b.url)}" target="_blank" rel="noopener">${esc(b.label)} ↗</a>`
+      : `<button class="${b.style}" data-press="${esc(b.custom_id)}" data-mid="${m.id}">${esc(b.label)}</button>`).join("")}</div>` : "";
     const intent = m.intent ? `<div class="intent"><span class="pill ${m.intent.kind === "unknown" ? "unknown" : ""}">${esc(m.intent.label)}</span>
       <span>${esc(m.intent.detail)}</span><button class="flag ${flags.has(m.id) ? "on" : ""}" data-flag="${m.id}" title="判斷錯了">${flags.has(m.id) ? "✗ 已標記" : "✗"}</button></div>` : "";
     html += `<article class="msg ${m.ping && pingRe.test(m.text) ? "pinged" : ""}">
@@ -397,7 +399,9 @@ function wire() {
     e.preventDefault();
     const text = $("#input").value.trim();
     if (!text) return;
-    call("say", me, text, replyTo, "", $("#atjvs").checked, +$("#where").value);
+    const sl = text.match(/^\/(說明|設定|天氣)\s*(.*)$/);
+    if (sl) call("slash", me, sl[1], sl[2], +$("#where").value);
+    else call("say", me, text, replyTo, "", $("#atjvs").checked, +$("#where").value);
     $("#input").value = ""; replyTo = null; $("#replybar").hidden = true;
     $("#log").scrollTop = $("#log").scrollHeight;
   });
@@ -487,6 +491,8 @@ function runBatch(text, startLocal) {
       reply = target ? target.id : null; mentioned = false; rest = mm[2];
     }
     if (rest.startsWith("~")) { mentioned = false; rest = rest.slice(1).trim(); }
+    const sl = rest.match(/^\/(說明|設定|天氣)\s*(.*)$/);
+    if (sl) { state = JSON.parse(sim.slash(who, sl[1], sl[2], chan)); continue; }
     state = JSON.parse(sim.say(who, rest, reply, tag, mentioned, chan));
   }
   draw();
