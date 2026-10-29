@@ -36,6 +36,6 @@ def test_ephemeral_and_weather_and_settings():
     assert eph["ephemeral_for"] == 3 and "不是你的" in eph["text"]
     [w] = last(sim.say(1, "天氣"))
     assert "臺北市" in w["text"] and "假資料" in w["text"]
-    st = json.loads(sim.save_settings(json.dumps({"fire_phrases": "嘿，{text}！", "nag_max": "0"})))
+    st = json.loads(sim.save_settings(json.dumps({"fire_phrases": "嘿，{text}！"}), "replies"))
     assert st["settings"]["fire_phrases"] == "嘿，{text}！"
     assert json.loads(sim.clear())["messages"] == []

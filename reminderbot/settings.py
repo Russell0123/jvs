@@ -32,6 +32,15 @@ DEFAULTS: dict = {
     "hot_advice": "記得補充水分。\n注意避暑。\n今天有點曬。",
     "cold_advice": "可以帶個外套。\n今天偏涼。\n別穿太少。",
     "nice_advice": "天氣不錯，適合出門。\n今天舒服。\n出去走走吧。",
+    "done_phrases": "👍\n好～\n辛苦了",
+    "timer_phrases": "好，{duration}後叫你。\n開始計時⏱️",
+    "rain_confirm_phrases": "好，下雨天叫你。\nOK，會下雨再跟你說。",
+    "payday_ask_phrases": "你發薪日是幾號？",
+    "payday_set_phrases": "記住了，每月 {day} 號。",
+    "draft_cancel_phrases": "好，先不設。\nOK，那先不提醒。",
+    "no_target_phrases": "現在沒有在響的提醒耶。",
+    "not_found_phrases": "找不到耶。",
+    "unknown_phrases": "嗯？沒聽懂😅\n這句我還不會耶。\n換個說法試試？",
     "show_exact_time": False,         # 回覆下面用小字附上實際時間（預設關；按「查看」看得到）
 
     # 常見提醒：講到這些就建立同一種提醒，用固定的回法（一行一種：名稱｜關鍵字｜設好時的回覆｜時間到的訊息，多個用 / 隔開）
@@ -100,65 +109,65 @@ DEFAULTS: dict = {
 
 # 設定網頁、測試網頁共用的欄位名稱
 LABELS = {
-    "feature_reminder": "提醒", "feature_note": "記住（願望清單、記事）", "feature_timer": "計時器",
-    "feature_weather": "天氣", "feature_mention_others": "可以提醒別人（@其他成員）",
-    "confirm_phrases": "設好提醒", "confirm_when_phrases": "設好提醒（時間講得很短時，例如「這幾天」）",
-    "confirm_other_phrases": "設好提醒別人的", "repeat_phrases": "設好重複提醒",
-    "ask_phrases": "不確定時間時的問法", "ask_event_phrases": "看事件的問法（出門前、吃完飯後…）",
-    "ask_vague_phrases": "時間太模糊的問法（有空的時候、之後…）",
-    "snooze_phrases": "延後", "snooze_when_phrases": "延後（時間講得很短時）",
-    "cancel_phrases": "取消／刪除", "cancel_all_phrases": "取消一整批",
-    "note_phrases": "記事存好", "fire_phrases": "提醒時間到", "nag_phrases": "沒按「好」再提醒",
-    "rain_advice": "天氣：會下雨時的建議", "hot_advice": "天氣：很熱時", "cold_advice": "天氣：偏冷時",
-    "nice_advice": "天氣：舒服時",
-    "show_exact_time": "回覆下面附上實際時間（小字）",
-    "topics": "常見提醒（一行一種：名稱｜關鍵字｜設好時的回覆｜時間到的訊息，多個用 / 隔開）",
-    "timer_template": "計時到的訊息", "rain_template": "下雨天提醒的訊息",
-    "btn_done_label": "按鈕：完成", "btn_later_label": "按鈕：晚點", "btn_later_minutes": "「晚點」延後幾分鐘",
-    "btn_tomorrow_label": "按鈕：明天", "btn_tomorrow_time": "「明天」延到明天幾點",
-    "btn_stop_label": "按鈕：重複提醒之後都不要",
-    "date_only_time": "只講日期時用幾點", "time_morning": "「早上」", "time_noon": "「中午」",
-    "time_afternoon": "「下午」", "time_evening": "「傍晚」", "time_night": "「晚上」",
-    "few_days": "「這幾天」= 幾天後", "payday": "發薪日（每月幾號，0 = 沒設定）",
-    "nag_enabled": "沒按「好」會再提醒", "nag_interval_minutes": "再提醒間隔（分鐘）", "nag_max": "最多再提醒幾次",
-    "weather_daily_enabled": "每天自動貼天氣", "weather_daily_time": "每天幾點看預報（也用來判斷下雨天提醒）",
-    "weather_county": "縣市", "weather_rain_threshold": "降雨機率超過幾 % 算下雨",
-    "note_categories": "記事分類（一行一類：「分類：關鍵字,關鍵字」，最後一行是沒對到時的預設分類）",
-    "wish_lists": "願望清單（一行一個：「清單名稱：動詞,動詞」）",
-    "wish_listen_ids": "沒 @ 也會記錄誰的願望（成員 ID，逗號分隔；空白 = 只有你）",
-    "passive_ack": "沒 @ 時記下來會回一句",
-    "wish_acks": "記下願望時的回覆（一行一個清單：「清單名稱：回覆/回覆」，* 是其他）",
-    "suggest_count": "問「可以畫什麼」時挑幾個",
-    "suggest_half_life_days": "近期加成的半衰期（天）",
-    "suggest_phrases": "挑清單時的開頭",
+    "feature_reminder": "提醒", "feature_note": "願望清單、記事", "feature_timer": "計時",
+    "feature_weather": "天氣", "feature_mention_others": "提醒別人",
+    "confirm_phrases": "一般", "confirm_when_phrases": "照著講時間 {when}", "confirm_other_phrases": "提醒別人 {who}",
+    "repeat_phrases": "重複提醒", "ask_phrases": "一般", "ask_event_phrases": "看事件 {event}",
+    "ask_vague_phrases": "太模糊 {vague}", "snooze_phrases": "一般", "snooze_when_phrases": "照著講時間 {when}",
+    "cancel_phrases": "一個", "cancel_all_phrases": "一整批 {scope}", "done_phrases": "回覆「好」",
+    "note_phrases": "記事", "wish_acks": "願望（清單：回覆/回覆）", "suggest_phrases": "挑清單 {verb}",
+    "fire_phrases": "時間到 {text}", "nag_phrases": "再催 {text}", "timer_template": "計時到 {mentions} {text}",
+    "rain_template": "下雨天 {mentions} {text}", "timer_phrases": "開始計時 {duration}",
+    "rain_confirm_phrases": "設好下雨天提醒", "payday_ask_phrases": "問發薪日", "payday_set_phrases": "記住發薪日 {day}",
+    "draft_cancel_phrases": "不設了", "no_target_phrases": "沒有可延後的", "not_found_phrases": "找不到",
+    "unknown_phrases": "聽不懂",
+    "rain_advice": "下雨", "hot_advice": "很熱", "cold_advice": "偏冷", "nice_advice": "舒服",
+    "topics": "名稱｜關鍵字｜回覆｜時間到（多個用 / 隔開）",
+    "show_exact_time": "回覆附上實際時間",
+    "btn_done_label": "完成", "btn_later_label": "晚點", "btn_later_minutes": "晚點＝幾分鐘後",
+    "btn_tomorrow_label": "明天", "btn_tomorrow_time": "明天＝幾點", "btn_stop_label": "之後都取消",
+    "date_only_time": "只講日期", "time_morning": "早上", "time_noon": "中午",
+    "time_afternoon": "下午", "time_evening": "傍晚", "time_night": "晚上",
+    "few_days": "這幾天＝幾天後", "payday": "發薪日（0＝沒設）",
+    "nag_enabled": "沒按「好」會再催", "nag_interval_minutes": "間隔（分鐘）", "nag_max": "最多幾次",
+    "weather_daily_enabled": "每天貼天氣", "weather_daily_time": "幾點", "weather_county": "縣市",
+    "weather_rain_threshold": "降雨機率 % 算下雨",
+    "note_categories": "記事分類（分類：關鍵字,關鍵字）", "wish_lists": "願望清單（清單：動詞,動詞）",
+    "wish_listen_ids": "沒 @ 也聽誰（ID，空白＝只有你）", "passive_ack": "沒 @ 時回一句",
+    "suggest_count": "一次挑幾個", "suggest_half_life_days": "近期加成半衰期（天）",
 }
-HINTS = {
-    "confirm_when_phrases": "{when} 你講的時間", "confirm_other_phrases": "{who} 被提醒的人",
-    "ask_event_phrases": "{event} 例如「出門」「吃完飯」", "ask_vague_phrases": "{vague} 例如「有空的時候」", "snooze_when_phrases": "{when}",
-    "cancel_all_phrases": "{scope} 今天／明天（沒講就是空的）",
-    "fire_phrases": "{text} 提醒內容", "nag_phrases": "{text}", "suggest_phrases": "{verb} 畫／看／買…",
-    "timer_template": "{mentions} {duration} {text}", "rain_template": "{mentions} {pop} {text}",
-}
+HINTS: dict = {}
+# 設定頁
 GROUPS = [
-    ("功能開關", ["feature_reminder", "feature_note", "feature_timer", "feature_weather", "feature_mention_others"]),
-    ("bot 的口吻（一行一句，隨機挑，最近用過的 3 句不重複）",
-     ["confirm_phrases", "confirm_when_phrases", "confirm_other_phrases", "repeat_phrases", "ask_phrases",
-      "ask_event_phrases", "ask_vague_phrases", "snooze_phrases", "snooze_when_phrases", "cancel_phrases", "cancel_all_phrases",
-      "note_phrases", "fire_phrases", "nag_phrases", "show_exact_time"]),
-    ("常見提醒", ["topics"]),
-    ("其他訊息", ["timer_template", "rain_template"]),
-    ("提醒按鈕", ["btn_done_label", "btn_later_label", "btn_later_minutes", "btn_tomorrow_label", "btn_tomorrow_time",
-              "btn_stop_label"]),
+    ("功能", ["feature_reminder", "feature_note", "feature_timer", "feature_weather", "feature_mention_others"]),
+    ("按鈕", ["btn_done_label", "btn_later_label", "btn_later_minutes", "btn_tomorrow_label", "btn_tomorrow_time",
+            "btn_stop_label"]),
     ("時間", ["date_only_time", "time_morning", "time_noon", "time_afternoon", "time_evening", "time_night",
             "few_days", "payday"]),
-    ("再提醒", ["nag_enabled", "nag_interval_minutes", "nag_max"]),
-    ("天氣", ["weather_daily_enabled", "weather_daily_time", "weather_county", "weather_rain_threshold",
-            "rain_advice", "hot_advice", "cold_advice", "nice_advice"]),
-    ("願望清單", ["wish_lists", "wish_listen_ids", "passive_ack", "wish_acks", "suggest_count",
-              "suggest_half_life_days", "suggest_phrases"]),
-    ("記事", ["note_categories"]),
+    ("再催", ["nag_enabled", "nag_interval_minutes", "nag_max"]),
+    ("天氣", ["weather_daily_enabled", "weather_daily_time", "weather_county", "weather_rain_threshold"]),
+    ("清單", ["wish_lists", "wish_listen_ids", "passive_ack", "suggest_count", "suggest_half_life_days",
+            "note_categories"]),
+    ("其他", ["show_exact_time"]),
 ]
-MULTILINE_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, str) and "\n" in v]
+# 回覆頁：bot 會說的每一句話
+REPLY_GROUPS = [
+    ("設好提醒", ["confirm_phrases", "confirm_when_phrases", "confirm_other_phrases", "repeat_phrases",
+              "rain_confirm_phrases", "timer_phrases"]),
+    ("時間到", ["fire_phrases", "nag_phrases", "timer_template", "rain_template"]),
+    ("問時間", ["ask_phrases", "ask_event_phrases", "ask_vague_phrases", "payday_ask_phrases"]),
+    ("延後", ["snooze_phrases", "snooze_when_phrases", "no_target_phrases"]),
+    ("取消／完成", ["cancel_phrases", "cancel_all_phrases", "done_phrases", "draft_cancel_phrases", "not_found_phrases"]),
+    ("清單", ["wish_acks", "note_phrases", "suggest_phrases", "payday_set_phrases"]),
+    ("天氣建議", ["rain_advice", "hot_advice", "cold_advice", "nice_advice"]),
+    ("常見提醒", ["topics"]),
+    ("其他", ["unknown_phrases"]),
+]
+REPLY_KEYS = [k for _, keys in REPLY_GROUPS for k in keys]
+SETTING_KEYS = [k for _, keys in GROUPS for k in keys]
+MULTILINE_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, str) and "\n" in v] + \
+    [k for k in REPLY_KEYS if k not in ("timer_template", "rain_template")]
+MULTILINE_KEYS = list(dict.fromkeys(MULTILINE_KEYS))
 
 BOOL_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, bool)]
 INT_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, int) and not isinstance(v, bool)]
@@ -233,10 +242,11 @@ def _lines(raw) -> list[tuple[str, list[str]]]:
     return out
 
 
-def validate(form: dict) -> tuple[dict, list[str]]:
-    """把網頁表單轉成設定值，回傳 (新設定, 錯誤訊息)。"""
+def validate(form: dict, keys=None) -> tuple[dict, list[str]]:
+    """把網頁表單轉成設定值，回傳 (新設定, 錯誤訊息)。只處理 keys（預設全部），其他設定不動。"""
     errors, out = [], {}
-    for k, default in DEFAULTS.items():
+    for k in (keys or DEFAULTS):
+        default = DEFAULTS[k]
         if k in BOOL_KEYS:
             out[k] = form.get(k) == "on"
             continue

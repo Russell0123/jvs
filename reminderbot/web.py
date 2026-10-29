@@ -13,7 +13,8 @@ from aiohttp import web
 from . import timeparse
 from .explain import describe, rules
 from .router import route
-from .settings import COUNTIES, DEFAULTS, GROUPS, HINTS, LABELS, MULTILINE_KEYS, note_categories, validate, wish_lists
+from .settings import (COUNTIES, DEFAULTS, GROUPS, LABELS, MULTILINE_KEYS, REPLY_GROUPS, REPLY_KEYS, SETTING_KEYS,
+                       note_categories, validate, wish_lists)
 
 log = logging.getLogger(__name__)
 
@@ -44,12 +45,13 @@ th{color:var(--muted);font-weight:500;white-space:nowrap}.wrap table{min-width:6
 
 def page(title: str, active: str, body: str, flash: str = "", error: bool = False) -> web.Response:
     nav = "".join(f'<a href="{href}" class="{"on" if key == active else ""}">{name}</a>'
-                  for key, href, name in [("settings", "/", "設定"), ("reminders", "/reminders", "提醒"),
-                                          ("notes", "/notes", "清單"), ("logic", "/logic", "判斷邏輯")])
+                  for key, href, name in [("reminders", "/reminders", "提醒"), ("notes", "/notes", "清單"),
+                                          ("replies", "/replies", "回覆"), ("logic", "/logic", "判斷"),
+                                          ("settings", "/", "設定")])
     fl = f'<div class="flash{" err" if error else ""}">{flash}</div>' if flash else ""
     html = (f"<!doctype html><html lang='zh-Hant'><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width,initial-scale=1'><title>{escape(title)}</title>"
-            f"<style>{CSS}</style></head><body><header><b>🤖 助理設定</b><nav>{nav}</nav></header>"
+            f"<style>{CSS}</style></head><body><header><b>jvs</b><nav>{nav}</nav></header>"
             f"<main>{fl}{body}</main></body></html>")
     return web.Response(text=html, content_type="text/html")
 
@@ -93,30 +95,48 @@ def make_app(bot) -> web.Application:
             out[i] = u.display_name if u else str(i)
         return out
 
-    async def settings_page(request: web.Request):
-        s = bot.store.settings()
-        msg = {"saved": "✅ 已儲存，馬上生效。", "weather": "✅ 已把天氣貼到頻道。"}.get(request.query.get("ok", ""), "")
-        return page("助理設定", "settings", render_settings(s), msg)
+    def form_page(kind: str, flash: str = "", error: bool = False):
+        title, groups, path = ("回覆", REPLY_GROUPS, "/replies") if kind == "replies" else ("設定", GROUPS, "/")
+        return page(title, kind, render_form(bot.store.settings(), groups, path, kind == "settings"), flash, error)
 
-    async def settings_save(request: web.Request):
+    async def settings_page(request: web.Request):
+        msg = {"saved": "✅ 已儲存", "weather": "✅ 已貼到頻道"}.get(request.query.get("ok", ""), "")
+        return form_page("settings", msg)
+
+    async def replies_page(request: web.Request):
+        return form_page("replies", "✅ 已儲存" if request.query.get("ok") else "")
+
+    async def save(request: web.Request, kind: str):
         form = await request.post()
-        values, errors = validate(dict(form))
+        keys = REPLY_KEYS if kind == "replies" else SETTING_KEYS
+        values, errors = validate(dict(form), keys)
         bot.store.save_settings(values)
         if errors:
-            return page("助理設定", "settings", render_settings(bot.store.settings()),
-                        "部分欄位沒存：" + escape("；".join(errors)), error=True)
-        raise web.HTTPSeeOther("/?ok=saved")
+            return form_page(kind, "沒存到：" + escape("；".join(errors)), error=True)
+        raise web.HTTPSeeOther(("/replies" if kind == "replies" else "/") + "?ok=saved")
 
-    async def settings_reset(request: web.Request):
-        bot.store.save_settings(DEFAULTS)
-        raise web.HTTPSeeOther("/?ok=saved")
+    async def reset(request: web.Request, kind: str):
+        keys = REPLY_KEYS if kind == "replies" else SETTING_KEYS
+        bot.store.save_settings({k: DEFAULTS[k] for k in keys})
+        raise web.HTTPSeeOther(("/replies" if kind == "replies" else "/") + "?ok=saved")
+
+    async def save_settings(request):
+        return await save(request, "settings")
+
+    async def save_replies(request):
+        return await save(request, "replies")
+
+    async def reset_settings(request):
+        return await reset(request, "settings")
+
+    async def reset_replies(request):
+        return await reset(request, "replies")
 
     async def weather_test(request: web.Request):
         try:
             await bot.post_weather_now()
         except Exception as e:
-            return page("助理設定", "settings", render_settings(bot.store.settings()),
-                        "天氣發送失敗：" + escape(str(e)), error=True)
+            return form_page("settings", "天氣發送失敗：" + escape(str(e)), error=True)
         raise web.HTTPSeeOther("/?ok=weather")
 
     async def reminders_page(request: web.Request):
@@ -181,8 +201,7 @@ def make_app(bot) -> web.Application:
                f"<select name='category'>{opts(f or (cats[0] if cats else ''))}</select>"
                f"<input type='text' name='text' placeholder='新增一項，例如：穿西裝的柴犬' required>"
                f"<button class='small'>新增</button></form>") if owners else ""
-        body = (f"<section><h2>清單與記事</h2><p class='tag'>「想畫／想看／想買…」是聊天裡自動記下來的願望；"
-                f"問 bot「我最近可以畫什麼」會從這裡挑。可以直接改內容、換清單或刪除。</p>"
+        body = (f"<section><h2>清單</h2>"
                 f"<div class='filters'>{filt}</div>{add}<div class='wrap'><table><tr><th>#</th><th colspan=2>清單／內容</th>"
                 f"<th>誰的</th><th>最後提到</th><th></th></tr>{rows or '<tr><td colspan=6>沒有資料</td></tr>'}"
                 f"</table></div></section>")
@@ -217,22 +236,21 @@ def make_app(bot) -> web.Application:
             result = (f"<div class='flash'><b>判斷：{escape(d['label'])}</b><br>{escape(d['detail']) or '（沒有細節）'}</div>")
         out = [f"<section><h2>試一句</h2><form class='rowform' method='get'><input type='text' name='q' "
                f"value='{escape(q, quote=True)}' placeholder='例如：每兩小時提醒我喝水'><button class='small'>看判斷</button>"
-               f"</form>{result}<p class='tag'>只是看 bot 會怎麼理解，不會真的建立提醒。</p></section>"]
+               f"</form>{result}</section>"]
         for sec in rules(s):
             rows = "".join(f"<tr><td><b>{escape(n)}</b></td><td>{escape(d)}</td><td>{escape('、'.join(w))}</td></tr>"
                            for n, d, w in sec["steps"])
             out.append(f"<section><h2>{escape(sec['title'])}</h2><div class='wrap'><table>"
                        f"<tr><th>規則</th><th>說明</th><th>關鍵字</th></tr>{rows}</table></div></section>")
-        out.append("<p class='tag'>常見提醒、願望清單、記事分類和 bot 的說法可以在「設定」頁改；"
-                   "其他規則要改程式（跟 Claude 說就好）。</p>")
-        return page("判斷邏輯", "logic", "".join(out))
+        return page("判斷", "logic", "".join(out))
 
     async def health(request: web.Request):
         return web.json_response({"ok": True, "discord_ready": bot.is_ready()})
 
     app = web.Application(middlewares=[guard])
     app.add_routes([
-        web.get("/", settings_page), web.post("/settings", settings_save), web.post("/settings/reset", settings_reset),
+        web.get("/", settings_page), web.post("/", save_settings), web.post("/reset", reset_settings),
+        web.get("/replies", replies_page), web.post("/replies", save_replies), web.post("/replies/reset", reset_replies),
         web.post("/weather/test", weather_test),
         web.get("/reminders", reminders_page), web.post(r"/reminders/{id:\d+}/cancel", reminder_cancel),
         web.get("/notes", notes_page), web.post(r"/notes/{id:\d+}/delete", note_delete),
@@ -242,12 +260,12 @@ def make_app(bot) -> web.Application:
     return app
 
 
-def render_settings(s: dict) -> str:
-    out = ["<form method='post' action='/settings'>"]
-    for title, keys in GROUPS:
+def render_form(s: dict, groups, path: str, tools: bool) -> str:
+    out = [f"<form method='post' action='{path}'>"]
+    for title, keys in groups:
         out.append(f"<section><h2>{title}</h2>")
         for k in keys:
-            v, label = s[k], LABELS.get(k, k)
+            v, label = s[k], escape(LABELS.get(k, k))
             if isinstance(DEFAULTS[k], bool):
                 out.append(f"<label class='check'><input type='checkbox' name='{k}' {'checked' if v else ''}> {label}</label>")
                 continue
@@ -256,19 +274,19 @@ def render_settings(s: dict) -> str:
                 opts = "".join(f"<option {'selected' if c == v else ''}>{c}</option>" for c in COUNTIES)
                 out.append(f"<select id='{k}' name='{k}'>{opts}</select>")
             elif k in MULTILINE_KEYS:
-                out.append(f"<textarea id='{k}' name='{k}'>{escape(str(v))}</textarea>")
+                rows = min(8, max(2, str(v).count("\n") + 1))
+                out.append(f"<textarea id='{k}' name='{k}' rows='{rows}'>{escape(str(v))}</textarea>")
             elif isinstance(DEFAULTS[k], int):
                 out.append(f"<input type='number' id='{k}' name='{k}' value='{v}'>")
             else:
                 out.append(f"<input type='text' id='{k}' name='{k}' value='{escape(str(v), quote=True)}'>")
-            if k in HINTS:
-                out.append(f"<div class='hint'>可用：{escape(HINTS[k])}</div>")
         out.append("</section>")
     out.append("<div class='bar'><button>儲存</button></div></form>")
-    out.append("<section><h2>工具</h2><form method='post' action='/weather/test' style='display:inline'>"
-               "<button class='ghost'>現在貼一次天氣到頻道</button></form> "
-               "<form method='post' action='/settings/reset' style='display:inline' "
-               "onsubmit=\"return confirm('全部設定恢復預設？')\"><button class='ghost'>全部恢復預設</button></form></section>")
+    reset = "/reset" if path == "/" else f"{path}/reset"
+    out.append("<section>" + ("<form method='post' action='/weather/test' style='display:inline'>"
+                              "<button class='ghost'>貼一次天氣</button></form> " if tools else "") +
+               f"<form method='post' action='{reset}' style='display:inline' "
+               "onsubmit=\"return confirm('恢復預設？')\"><button class='ghost'>恢復預設</button></form></section>")
     return "".join(out)
 
 

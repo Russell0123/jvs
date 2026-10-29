@@ -11,7 +11,8 @@ from datetime import datetime, timedelta, timezone
 from reminderbot import timeparse, weather
 from reminderbot.explain import describe, rules
 from reminderbot.core import Assistant, Edit, Incoming, NeedWeather, Send, User
-from reminderbot.settings import COUNTIES, DEFAULTS, GROUPS, HINTS, LABELS, MULTILINE_KEYS, note_categories, validate, wish_lists
+from reminderbot.settings import (COUNTIES, DEFAULTS, GROUPS, HINTS, LABELS, MULTILINE_KEYS, REPLY_GROUPS, REPLY_KEYS,
+                                  SETTING_KEYS, note_categories, validate, wish_lists)
 from reminderbot.store import MemoryStore
 
 TZ = timezone(timedelta(hours=8))
@@ -40,19 +41,19 @@ class Sim:
             "members": [{"id": u.id, "name": u.name, "roles": sorted(u.role_ids)} for u in MEMBERS.values()],
             "roles": [{"id": k, "name": v} for k, v in ROLES.items()],
             "bot": {"id": BOT_ID, "name": "jvs"},
-            "defaults": DEFAULTS, "labels": LABELS, "hints": HINTS, "groups": GROUPS, "counties": COUNTIES,
+            "defaults": DEFAULTS, "labels": LABELS, "hints": HINTS, "groups": GROUPS, "reply_groups": REPLY_GROUPS, "counties": COUNTIES,
             "multiline": MULTILINE_KEYS,
         }, ensure_ascii=False)
 
     def say(self, user_id: int, text: str, reply_to: int | None = None, tag: str = "", mentioned: bool = True) -> str:
         user = MEMBERS[int(user_id)]
-        raw, mentions, roles = self._mentions(text, mentioned)
+        reply_bot = reply_to if reply_to and self._msg(reply_to) and self._msg(reply_to)["author"] == BOT_ID else None
+        # 回覆 bot 的訊息就算在跟 bot 講話，文字裡不會有 @（跟 Discord 一樣）
+        raw, mentions, roles = self._mentions(text, mentioned and not reply_bot)
         mid = self._add(author=user.id, text=raw, reply_to=reply_to)
         if tag:
             self._msg(mid)["tag"] = tag
-        mentioned = f"<@{BOT_ID}>" in raw
-        reply_bot = reply_to if mentioned and reply_to and self._msg(reply_to) \
-            and self._msg(reply_to)["author"] == BOT_ID else None
+        mentioned = f"<@{BOT_ID}>" in raw or reply_bot is not None
         actions = self.core.handle(Incoming(user, raw, CHANNEL, mid, mentions, roles, reply_bot, mentioned), self.now)
         self._msg(mid)["intent"] = describe(self.core.last_intent, TZ)
         self._run(actions)
@@ -94,15 +95,14 @@ class Sim:
         self.now = target     # 往回撥不跑排程
         return self.state()
 
-    def save_settings(self, form_json: str) -> str:
-        values, errors = validate(json.loads(form_json))
+    def save_settings(self, form_json: str, page: str = "settings") -> str:
+        values, errors = validate(json.loads(form_json), REPLY_KEYS if page == "replies" else SETTING_KEYS)
         self.store.save_settings(values)
-        return self.state(note="；".join(errors) if errors else "設定已套用。")
+        return self.state(note="；".join(errors) if errors else "已套用")
 
-    def reset_settings(self) -> str:
-        self.store.save_settings(DEFAULTS)
-        self.store.save_settings({"weather_county": "臺北市"})
-        return self.state(note="設定已恢復預設。")
+    def reset_settings(self, page: str = "settings") -> str:
+        self.store.save_settings({k: DEFAULTS[k] for k in (REPLY_KEYS if page == "replies" else SETTING_KEYS)})
+        return self.state(note="已恢復預設")
 
     def divider(self, text: str) -> str:
         """批次測試的分段標題（不是訊息，bot 不會回）。"""

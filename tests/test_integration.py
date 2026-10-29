@@ -212,18 +212,21 @@ async def test_web_auth_and_settings(tmp_path):
         assert (await client.get("/")).status == 403          # 沒有 Cloudflare Access 標頭
         h = {"Cf-Access-Authenticated-User-Email": "Me@Example.com"}
         resp = await client.get("/", headers=h)
-        assert resp.status == 200 and "bot 的口吻" in await resp.text()
+        assert resp.status == 200 and "再催" in await resp.text()
+        assert "設好提醒" in await (await client.get("/replies", headers=h)).text()
 
         form = {k: v for k, v in bot.store.settings().items() if not isinstance(v, bool)}
         form.update(fire_phrases="嘿，{text}！", weather_daily_time="6:45", feature_reminder="on")
-        resp = await client.post("/settings", data=form, headers=h, allow_redirects=False)
+        resp = await client.post("/replies", data={"fire_phrases": "嘿，{text}！"}, headers=h, allow_redirects=False)
+        assert resp.status == 303
+        resp = await client.post("/", data=form, headers=h, allow_redirects=False)
         assert resp.status == 303
         s = bot.store.settings()
-        assert s["fire_phrases"] == "嘿，{text}！"
+        assert s["fire_phrases"] == "嘿，{text}！"          # 存設定頁不會蓋掉回覆頁
         assert s["weather_daily_time"] == "06:45"
         assert s["feature_reminder"] is True and s["feature_timer"] is False   # 沒勾 = 關
 
-        resp = await client.post("/settings", data=form, allow_redirects=False,
+        resp = await client.post("/", data=form, allow_redirects=False,
                                  headers={**h, "Origin": "https://evil.example"})
         assert resp.status == 403
         assert (await client.get("/reminders", headers=h)).status == 200
@@ -360,3 +363,31 @@ def test_suggest_is_fair_and_recency_weighted():
             counts[p] += 1
     assert seen == set(counts)                                         # 每一項都被提到
     assert counts["題目11"] > counts["題目0"]                           # 近期的比較常出現
+
+
+def test_reply_to_bot_message_without_mention(core):
+    chat = Chat(core)
+    [(cid, _)] = chat.say(ME, "明天下午4點提醒我交報告")
+    [(fid, _)] = chat.say(ME, "10分鐘後提醒我關火") and chat.tick(T0 + timedelta(minutes=10))
+    # 回覆「設好提醒」那則說「取消」→ 取消那一個
+    out = chat.say(ME, "取消", reply_to=cid, now=T0 + timedelta(minutes=11))
+    assert core.store.get_reminder(1)["status"] == "cancelled" and core.store.get_reminder(2)["status"] == "fired"
+    assert out[0][1].buttons[0].label == "復原"
+    # 回覆響起來的那則說「後天」→ 延後那一個
+    chat.say(ME, "後天", reply_to=fid, now=T0 + timedelta(minutes=12))
+    rem = core.store.get_reminder(2)
+    assert rem["status"] == "pending" and datetime.fromtimestamp(rem["due_at"], TZ).day == 31
+    [(fid, _)] = chat.tick(T0 + timedelta(days=2, hours=-5))
+    chat.say(ME, "好", reply_to=fid, now=T0 + timedelta(days=2, hours=-5))
+    assert core.store.get_reminder(2)["status"] == "done"
+    # 別人回覆不能動
+    chat.say(ME, "每天下午3點提醒我喝咖啡")
+    [(fid, _)] = chat.tick(T0 + timedelta(days=3, hours=1))
+    chat.say(MING, "不用了", reply_to=fid, now=T0 + timedelta(days=3, hours=1))
+    assert core.store.get_reminder(3)["status"] == "pending"
+    # 回覆重複提醒的某一次說「不用了」→ 整串停掉
+    chat.say(ME, "不用了", reply_to=fid, now=T0 + timedelta(days=3, hours=1))
+    assert core.store.get_reminder(3)["status"] == "cancelled"
+    # 回覆說的不是取消／完成／時間 → 照一般判斷
+    [(_, r)] = chat.say(ME, "我想畫柴犬", reply_to=fid, now=T0 + timedelta(days=3, hours=2))
+    assert core.store.user_notes(7, "想畫")

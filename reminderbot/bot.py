@@ -85,7 +85,10 @@ class ReminderBot(discord.Client):
     async def on_message(self, message: discord.Message):
         if message.author.bot or message.channel.id not in self.config.channel_ids:
             return
-        mentioned = self.user in message.mentions or any(self._is_my_role(r) for r in message.role_mentions)
+        # 回覆 bot 的訊息也算在跟 bot 講話（回覆時文字裡不會有 @，但 Discord 會帶上「回覆的是哪則」）
+        replied = await self._replied_bot_message_id(message)
+        mentioned = self.user in message.mentions or any(self._is_my_role(r) for r in message.role_mentions) \
+            or replied is not None
         if not mentioned and not message.content:
             return      # 沒開 Message Content Intent 時拿不到內容
         incoming = Incoming(
@@ -93,7 +96,7 @@ class ReminderBot(discord.Client):
             message_id=message.id,
             mention_user_ids=[u.id for u in message.mentions if u.id != self.user.id and not u.bot],
             mention_role_ids=[r.id for r in message.role_mentions if not self._is_my_role(r)],
-            reply_to_bot_message_id=await self._replied_bot_message_id(message) if mentioned else None,
+            reply_to_bot_message_id=replied,
             mentioned=mentioned)
         try:
             await self.run_actions(self.core.handle(incoming, self.now()), source=message)

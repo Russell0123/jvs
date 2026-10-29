@@ -177,24 +177,63 @@ class Assistant:
             self._save_wishes(msg.author.id, wishes, now)
             return self._reply(msg, self._wish_ack(wishes, rng)) if s["passive_ack"] else []
 
+        if msg.reply_to_bot_message_id:
+            out = self._reply_to_reminder(msg, text, now, s, rng)
+            if out is not None:
+                return out
+
         it = route(text, now, s)
-        if msg.reply_to_bot_message_id and it.kind in ("reminder", "unknown") \
-                and re.search(r"延後|晚點|等等|等一下|再提醒|再說|延到", text):
-            it = Intent("snooze", when=it.when, phrase=it.phrase, dated=it.dated, ask=it.ask, event=it.event,
-                        seconds=it.seconds)
         self.last_intent = it
 
         draft = self._draft_for(msg, now)
         if draft:
             if re.fullmatch(r"(算了|不用了|先不要|不要了|取消|沒事)[。！!]?", text):
                 self.store.update_reminder(draft["id"], status="cancelled")
-                return self._reply(msg, rng.choice(["好，先不設。", "OK，那先不提醒。"]))
+                return self._reply(msg, self.phrase(s, "draft_cancel_phrases", rng))
             answer = self._time_answer(text, it, now, s)
             if answer:
                 self.last_intent = Intent("reminder", when=answer.when, repeat=answer.repeat, text="（回答時間）")
                 return self._finish_draft(draft, answer.when, answer.repeat, answer.phrase(text), answer.dated,
                                           msg.channel_id, msg.message_id, now, rng)
         return self._dispatch(msg, it, s, now, rng)
+
+    def _reply_to_reminder(self, msg: Incoming, text: str, now: datetime, s: dict, rng) -> list | None:
+        """回覆了 bot 的某則提醒訊息（不用 @）：取消、完成或延後「那一個」。不是這幾種就照一般判斷。"""
+        rid = self.store.get_meta(f"msg:{msg.reply_to_bot_message_id}")
+        rem = self.store.get_reminder(int(rid)) if rid else None
+        if not rem or rem["status"] == "draft" or not can_touch(rem, msg.author):
+            return None
+        mid, t = msg.reply_to_bot_message_id, text.strip()
+        if re.search(r"取消|不用了|不要了|刪掉|刪除|拿掉|算了|不需要|別提醒|不用提醒", t) and len(t) <= 12:
+            parent = self.store.get_reminder(rem["parent_id"]) if rem["parent_id"] else None
+            target = parent if parent and parent["status"] == "pending" else rem
+            self.last_intent = Intent("cancel", ids=[target["id"]])
+            out = self._cancel_now(msg, "reminders", [target["id"]], "", rng, s)
+            if rem["id"] != target["id"]:
+                self.store.update_reminder(rem["id"], status="done")
+            return [Edit(msg.channel_id, mid, strike=True), *out]
+        if re.fullmatch(r"(好|好的|好了|收到|ok|okay|完成|做完了|弄好了|弄完了|知道了|了解|👍|✅)[。！!～~]*", t, re.I):
+            self.last_intent = Intent("cancel", text="完成")
+            self.store.update_reminder(rem["id"], status="done")
+            return [Edit(msg.channel_id, mid, append="-# ✅"), *self._reply(msg, self.phrase(s, "done_phrases", rng))]
+        if t in (s["btn_later_label"], s["btn_tomorrow_label"]):
+            code = str(s["btn_later_minutes"]) if t == s["btn_later_label"] else "tmr"
+            when = self._choice_dt(code, now, s)
+            self.last_intent = Intent("snooze", when=when, phrase=t)
+            return self._apply_snooze(rem, when, "", msg.channel_id, msg.message_id, s, rng)
+        it = route(t, now, s)
+        when, phrase, dated = None, "", True
+        if it.kind == "snooze" and it.when:
+            when, phrase, dated = it.when, it.phrase, it.dated
+        elif (answer := self._time_answer(t, it, now, s)) is not None:
+            when, phrase, dated = answer.when, answer.phrase(t), answer.dated
+        elif it.kind == "reminder" and it.when and not it.text:
+            when, phrase, dated = it.when, it.phrase, it.dated
+        if when is None:
+            return None
+        self.last_intent = Intent("snooze", when=when, phrase=phrase, dated=dated)
+        return self._apply_snooze(rem, when, self._echo(phrase, when, dated, now), msg.channel_id, msg.message_id,
+                                  s, rng)
 
     def _time_answer(self, text: str, it: Intent, now: datetime, s: dict):
         """「明天晚上」「8點吧」這種只有時間的句子，當成在回答問句。又講了「提醒…」就是新的指令。"""
@@ -233,7 +272,7 @@ class Assistant:
                 kind="timer", channel_id=msg.channel_id, creator_id=msg.author.id,
                 targets=[f"u:{msg.author.id}"], text=it.text, due_at=int(due.timestamp()), now=ts,
                 extra={"duration": fmt_seconds(it.seconds)})
-            return reply(rng.choice([f"好，{fmt_seconds(it.seconds)}後叫你。", "開始計時⏱️"]), [cancel_button(rid)])
+            return reply(self.phrase(s, "timer_phrases", rng, duration=fmt_seconds(it.seconds)), [cancel_button(rid)])
 
         if it.kind == "note":
             if not s["feature_note"]:
@@ -260,13 +299,13 @@ class Assistant:
                 if rem and rem["status"] not in ("done", "cancelled", "expired") and can_touch(rem, msg.author):
                     ok.append(rid)
             if not ok:
-                return reply("找不到這個提醒耶。")
+                return reply(self.phrase(s, "not_found_phrases", rng))
             return self._cancel_now(msg, "reminders", ok, "", rng, s)
 
         if it.kind == "delete_note":
             ok = [i for i in it.ids if (n := self.store.get_note(i)) and n["user_id"] == msg.author.id]
             if not ok:
-                return reply("找不到這則記事耶。")
+                return reply(self.phrase(s, "not_found_phrases", rng))
             return self._cancel_now(msg, "notes", ok, "", rng, s)
 
         if it.kind == "cancel_match":
@@ -285,14 +324,14 @@ class Assistant:
                 repeat = f"monthly:{it.day}" if draft["extra"].get("payday_repeat") else None
                 return self._finish_draft(draft, when, repeat, "發薪日", True, msg.channel_id, msg.message_id,
                                           now, rng)
-            return reply(f"記住了，每月 {it.day} 號。")
+            return reply(self.phrase(s, "payday_set_phrases", rng, day=it.day))
 
         if it.kind == "weather":
             if not s["feature_weather"]:
                 return reply("天氣功能關著喔。")
             return [NeedWeather(it.county or s["weather_county"], msg.channel_id, reply_to=msg.message_id)]
 
-        return reply(rng.choice(["嗯？沒聽懂😅", "這句我還不會耶。", "換個說法試試？"]))
+        return reply(self.phrase(s, "unknown_phrases", rng))
 
     # ---------- 提醒 ----------
     def _targets(self, msg: Incoming, s: dict) -> tuple[list[str], bool]:
@@ -311,14 +350,14 @@ class Assistant:
 
         if it.rain:
             rid = self.store.add_reminder(kind="rain", due_at=FAR_FUTURE, extra=extra, **base)
-            return self._reply(msg, rng.choice(["好，下雨天叫你。", "OK，會下雨再跟你說。"]), confirm_buttons(rid))
+            return self._reply(msg, self.phrase(s, "rain_confirm_phrases", rng), confirm_buttons(rid), rid)
 
         if it.payday:
             extra.update(payday=True, payday_repeat=bool(it.repeat))
             when = self._next_payday(msg.author.id, now, s)
             if when is None:
                 rid = self.store.add_reminder(due_at=0, status="draft", extra=extra, **base)
-                return self._reply(msg, "你發薪日是幾號？", reminder_id=rid)
+                return self._reply(msg, self.phrase(s, "payday_ask_phrases", rng), reminder_id=rid)
             it.when, it.repeat, it.phrase = when, (f"monthly:{when.day}" if it.repeat else None), "發薪日"
 
         if it.ask:
@@ -330,7 +369,7 @@ class Assistant:
         rid = self.store.add_reminder(due_at=int(it.when.timestamp()), repeat=it.repeat, extra=extra, **base)
         line = self._confirm_line(it.when, it.repeat, it.phrase, it.dated, targets if others else None,
                                   it.topic, s, now, rng)
-        return self._reply(msg, line, confirm_buttons(rid))
+        return self._reply(msg, line, confirm_buttons(rid), rid)
 
     def _confirm_line(self, when, repeat, phrase, dated, others, topic, s, now, rng) -> str:
         """設好提醒的回覆：短、不重述內容。常見提醒用它自己的說法；時間講得很短時偶爾照著講。"""
@@ -420,7 +459,7 @@ class Assistant:
         out = []
         if draft["message_id"]:
             out.append(Edit(draft["channel_id"], draft["message_id"]))
-        out.append(Send(channel_id, line, confirm_buttons(draft["id"]), reply_to=reply_to))
+        out.append(Send(channel_id, line, confirm_buttons(draft["id"]), reply_to=reply_to, reminder_id=draft["id"]))
         return out
 
     def _next_payday(self, user_id: int, now: datetime, s: dict) -> datetime | None:
@@ -439,7 +478,7 @@ class Assistant:
             fired = [r for r in self.store.all_reminders(("fired",)) if can_touch(r, msg.author)]
             rem = max(fired, key=lambda r: r["fired_at"] or 0) if fired else None
         if rem is None:
-            return self._reply(msg, "現在沒有在響的提醒耶。")
+            return self._reply(msg, self.phrase(s, "no_target_phrases", rng))
         if not can_touch(rem, msg.author):
             return self._reply(msg, "這不是你的提醒喔。")
         if it.ask:
@@ -468,7 +507,7 @@ class Assistant:
             notes = self.store.user_notes(uid)
             hits = [n["id"] for n in notes if (it.all and not it.keyword) or fuzzy_match(it.keyword, n["text"])]
             if not hits:
-                return self._reply(msg, "找不到耶。")
+                return self._reply(msg, self.phrase(s, "not_found_phrases", rng))
             return self._cancel_now(msg, "notes", hits, "", rng, s, many=it.all)
         rems = self.store.user_reminders(uid)
         if it.day is not None:
@@ -479,7 +518,7 @@ class Assistant:
         elif not it.all and it.day is None:
             return self._reply(msg, "要取消哪一個？\n" + self.list_text(uid, "reminders", None))
         if not rems:
-            return self._reply(msg, "找不到耶。")
+            return self._reply(msg, self.phrase(s, "not_found_phrases", rng))
         scope = {0: "今天", 1: "明天"}.get(it.day, "")
         return self._cancel_now(msg, "reminders", [r["id"] for r in rems], scope, rng, s,
                                 many=it.all or it.day is not None)
@@ -802,8 +841,10 @@ class Assistant:
         return f"{days // 30} 個月前提到"
 
     def sent(self, reminder_id: int, message_id: int):
-        """Send 帶 reminder_id 的訊息送出後呼叫，記下訊息編號（延後、再提醒、回答問句要用）。"""
+        """Send 帶 reminder_id 的訊息送出後呼叫：記下訊息編號（延後、再提醒、回答問句要用），
+        也記下「這則訊息是哪個提醒」，之後有人回覆這則訊息就知道在講哪個。"""
         self.store.update_reminder(reminder_id, message_id=message_id)
+        self.store.set_meta(f"msg:{message_id}", reminder_id)
 
     def next_event_at(self, now: datetime) -> datetime | None:
         """測試網頁「跳到下一件事」用：下一個提醒或再提醒的時間。"""
