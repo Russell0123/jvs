@@ -17,7 +17,8 @@ from reminderbot.store import MemoryStore
 
 TZ = timezone(timedelta(hours=8))
 BOT_ID = 1000
-CHANNEL = 1
+CHANNEL = 1                       # 提醒頻道
+CHANNELS = {1: "提醒", 2: "閒聊"}
 MEMBERS = {
     1: User(1, "你", {50}),
     2: User(2, "小明", {50}),
@@ -29,7 +30,7 @@ ROLES = {50: "樂團"}
 class Sim:
     def __init__(self, start_ms: float):
         self.store = MemoryStore()
-        self.core = Assistant(self.store, TZ, owner_id=1)     # 「你」是 bot 的主人
+        self.core = Assistant(self.store, TZ, owner_id=1, home_channel_id=CHANNEL)     # 「你」是 bot 的主人
         self.now = datetime.fromtimestamp(start_ms / 1000, TZ).replace(second=0, microsecond=0)
         self.messages: list[dict] = []
         self.next_id = 1
@@ -41,30 +42,35 @@ class Sim:
             "members": [{"id": u.id, "name": u.name, "roles": sorted(u.role_ids)} for u in MEMBERS.values()],
             "roles": [{"id": k, "name": v} for k, v in ROLES.items()],
             "bot": {"id": BOT_ID, "name": "jvs"},
+            "channels": [{"id": k, "name": v} for k, v in CHANNELS.items()],
             "defaults": DEFAULTS, "labels": LABELS, "hints": HINTS, "groups": GROUPS, "reply_groups": REPLY_GROUPS, "counties": COUNTIES,
             "multiline": MULTILINE_KEYS,
         }, ensure_ascii=False)
 
-    def say(self, user_id: int, text: str, reply_to: int | None = None, tag: str = "", mentioned: bool = True) -> str:
+    def say(self, user_id: int, text: str, reply_to: int | None = None, tag: str = "", mentioned: bool = True,
+            channel: int = CHANNEL) -> str:
+        channel = int(channel)
+        if reply_to and self._msg(reply_to):
+            channel = self._msg(reply_to)["channel"]     # 回覆一定在那則訊息的頻道
         user = MEMBERS[int(user_id)]
         reply_bot = reply_to if reply_to and self._msg(reply_to) and self._msg(reply_to)["author"] == BOT_ID else None
         # 回覆 bot 的訊息就算在跟 bot 講話，文字裡不會有 @（跟 Discord 一樣）
         raw, mentions, roles = self._mentions(text, mentioned and not reply_bot)
-        mid = self._add(author=user.id, text=raw, reply_to=reply_to)
+        mid = self._add(author=user.id, text=raw, reply_to=reply_to, channel=channel)
         if tag:
             self._msg(mid)["tag"] = tag
         mentioned = f"<@{BOT_ID}>" in raw or reply_bot is not None
-        actions = self.core.handle(Incoming(user, raw, CHANNEL, mid, mentions, roles, reply_bot, mentioned), self.now)
+        actions = self.core.handle(Incoming(user, raw, channel, mid, mentions, roles, reply_bot, mentioned), self.now)
         self._msg(mid)["intent"] = describe(self.core.last_intent, TZ)
         self._run(actions)
         return self.state()
 
     def press(self, user_id: int, message_id: int, custom_id: str) -> str:
         user = MEMBERS[int(user_id)]
-        res = self.core.press(custom_id, user, self.now)
         msg = self._msg(int(message_id))
+        res = self.core.press(custom_id, user, self.now, msg["channel"] if msg else CHANNEL)
         if res.ephemeral:
-            self._add(author=BOT_ID, text=res.ephemeral, ephemeral_for=user.id)
+            self._add(author=BOT_ID, text=res.ephemeral, ephemeral_for=user.id, channel=msg["channel"] if msg else CHANNEL)
         elif msg:
             if res.strike:
                 msg["text"] = f"~~{msg['text']}~~"
@@ -187,13 +193,15 @@ class Sim:
             raw = f"<@{BOT_ID}> {raw}"          # 預設每句都當作有 @jvs；關掉「@jvs」就是一般聊天
         return raw, mentions, roles
 
-    def _add(self, author: int, text: str, reply_to=None, buttons=None, ping=False, ephemeral_for=None) -> int:
+    def _add(self, author: int, text: str, reply_to=None, buttons=None, ping=False, ephemeral_for=None,
+             channel: int = CHANNEL) -> int:
         mid = self.next_id
         self.next_id += 1
         self.messages.append({
             "id": mid, "author": author, "text": text, "reply_to": reply_to, "time": self.now.strftime("%H:%M"),
             "date": timeparse.fmt_dt(self.now, TZ).split("）")[0] + "）",
             "buttons": [b.__dict__ for b in (buttons or [])], "ping": ping, "ephemeral_for": ephemeral_for,
+            "channel": channel,
         })
         return mid
 
@@ -203,9 +211,10 @@ class Sim:
     def _run(self, actions):
         for a in actions:
             if isinstance(a, Send):
-                mid = self._add(BOT_ID, a.text, reply_to=a.reply_to, buttons=a.buttons, ping=a.ping)
+                mid = self._add(BOT_ID, a.text, reply_to=a.reply_to, buttons=a.buttons, ping=a.ping,
+                                channel=a.channel_id or CHANNEL)
                 if a.reminder_id:
-                    self.core.sent(a.reminder_id, mid)
+                    self.core.sent(a.reminder_id, mid, a.channel_id)
             elif isinstance(a, Edit):
                 m = self._msg(a.message_id)
                 if m:
@@ -220,7 +229,7 @@ class Sim:
                 if a.post:
                     text = self.core.weather_text(a.county, periods, self.now).replace(
                         "-# 中央氣象署", "-# 測試用假資料")
-                    self._add(BOT_ID, text, reply_to=a.reply_to)
+                    self._add(BOT_ID, text, reply_to=a.reply_to, channel=a.channel_id or CHANNEL)
                 if a.rain_check:
                     self._run(self.core.rain_check(periods, self.now))
 

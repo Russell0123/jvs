@@ -59,7 +59,8 @@ class ReminderBot(discord.Client):
         self.config = config
         self.tz = config.tz
         self.store = SqliteStore(config.db_path)
-        self.core = Assistant(self.store, self.tz, owner_id=config.owner_id)
+        self.core = Assistant(self.store, self.tz, owner_id=config.owner_id,
+                              home_channel_id=config.reminder_channel_id)
         self.web_runner = None
 
     def now(self) -> datetime:
@@ -83,7 +84,9 @@ class ReminderBot(discord.Client):
 
     # ---------- 收訊息 ----------
     async def on_message(self, message: discord.Message):
-        if message.author.bot or message.channel.id not in self.config.channel_ids:
+        if message.author.bot:
+            return
+        if message.channel.id not in self.config.channel_ids and not self.store.settings()["all_channels"]:
             return
         # 回覆 bot 的訊息也算在跟 bot 講話（回覆時文字裡不會有 @，但 Discord 會帶上「回覆的是哪則」）
         replied = await self._replied_bot_message_id(message)
@@ -151,7 +154,7 @@ class ReminderBot(discord.Client):
         else:
             msg = await (await self._channel(a.channel_id)).send(a.text, **kwargs)
         if a.reminder_id:
-            self.core.sent(a.reminder_id, msg.id)
+            self.core.sent(a.reminder_id, msg.id, msg.channel.id)
 
     async def _weather(self, a: NeedWeather, source: discord.Message | None, raise_errors: bool = False):
         try:
@@ -168,7 +171,7 @@ class ReminderBot(discord.Client):
             text = f"🌧️ 天氣查不到：{e}"
             if a.reply_to is None:      # 每日自動天氣失敗就不要洗版
                 return
-        channel_id = a.channel_id or min(self.config.channel_ids)
+        channel_id = a.channel_id or self.config.reminder_channel_id
         await self._send(Send(channel_id, text, reply_to=a.reply_to), source)
 
     async def post_weather_now(self):
@@ -178,7 +181,7 @@ class ReminderBot(discord.Client):
 
     # ---------- 按鈕 ----------
     async def on_press(self, interaction: discord.Interaction, custom_id: str):
-        res = self.core.press(custom_id, to_user(interaction.user), self.now())
+        res = self.core.press(custom_id, to_user(interaction.user), self.now(), interaction.channel_id)
         if res.ephemeral:
             return await interaction.response.send_message(res.ephemeral, ephemeral=True)
         content = interaction.message.content
@@ -194,7 +197,7 @@ class ReminderBot(discord.Client):
     @tasks.loop(seconds=15)
     async def tick(self):
         try:
-            await self.run_actions(self.core.tick(self.now(), default_channel_id=min(self.config.channel_ids)))
+            await self.run_actions(self.core.tick(self.now(), default_channel_id=self.config.reminder_channel_id))
         except Exception:
             log.exception("排程執行失敗")
 

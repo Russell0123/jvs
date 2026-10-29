@@ -19,7 +19,8 @@ def _ids(raw: str) -> set[int]:
 @dataclass(frozen=True)
 class Config:
     discord_token: str
-    channel_ids: set[int]          # 只在這些頻道回應
+    channel_ids: set[int]          # 提醒頻道（設定關掉「所有頻道都回應」時，也只在這些頻道回應）
+    reminder_channel_id: int       # 提醒一律發到這裡（CHANNEL_IDS 的第一個）
     cwa_api_key: str
     db_path: str
     tz: ZoneInfo
@@ -40,6 +41,7 @@ def load() -> Config:
     return Config(
         discord_token=token,
         channel_ids=channels,
+        reminder_channel_id=int(os.environ["CHANNEL_IDS"].replace(" ", "").split(",")[0]),
         cwa_api_key=os.environ.get("CWA_API_KEY", ""),
         db_path=os.environ.get("DB_PATH", "data/bot.db"),
         tz=ZoneInfo(os.environ.get("TZ_NAME", "Asia/Taipei")),

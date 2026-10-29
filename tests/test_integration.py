@@ -197,7 +197,7 @@ def test_weather_parse():
 
 async def test_web_auth_and_settings(tmp_path):
     cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path="", tz=TZ, web_host="127.0.0.1",
-                 web_port=0, admin_email="me@example.com", web_password="", owner_id=7)
+                 web_port=0, admin_email="me@example.com", web_password="", owner_id=7, reminder_channel_id=1)
 
     async def fetch_user(i):
         raise LookupError
@@ -391,3 +391,36 @@ def test_reply_to_bot_message_without_mention(core):
     # 回覆說的不是取消／完成／時間 → 照一般判斷
     [(_, r)] = chat.say(ME, "我想畫柴犬", reply_to=fid, now=T0 + timedelta(days=3, hours=2))
     assert core.store.user_notes(7, "想畫")
+
+
+def test_any_channel_but_reminders_go_home():
+    core = Assistant(MemoryStore(), TZ, owner_id=7, home_channel_id=1)
+    CHAT = 2
+    sent = []
+
+    def run(actions):
+        for a in actions:
+            if isinstance(a, Send):
+                sent.append(a)
+                if a.reminder_id:
+                    core.sent(a.reminder_id, 100 + len(sent), a.channel_id)
+            elif isinstance(a, Edit):
+                sent.append(a)
+    run(core.handle(Incoming(ME, "<@1000> 10分鐘後提醒我關火", CHAT, 1), T0))
+    confirm = sent[-1]
+    assert confirm.channel_id == CHAT and "<#1>" in confirm.text           # 在閒聊頻道回，標註會在提醒頻道響
+    run(core.tick(T0 + timedelta(minutes=10), 1))
+    assert sent[-1].channel_id == 1 and "關火" in sent[-1].text           # 提醒發到提醒頻道
+    fired_mid = 100 + len(sent)
+    # 在閒聊頻道用說的延後：回覆在閒聊頻道，改的是提醒頻道那則
+    run(core.handle(Incoming(ME, "<@1000> 後天再提醒我", CHAT, 3), T0 + timedelta(minutes=11)))
+    edit = next(a for a in sent if isinstance(a, Edit))
+    assert edit.channel_id == 1 and edit.message_id == fired_mid and sent[-1].channel_id == CHAT
+    # 在提醒頻道設的就不用標註
+    run(core.handle(Incoming(ME, "<@1000> 明天提醒我繳費", 1, 4), T0))
+    assert "<#" not in sent[-1].text
+    # 問時間的按鈕在閒聊頻道按，確認也回在閒聊頻道
+    run(core.handle(Incoming(ME, "<@1000> 有空提醒我整理照片", CHAT, 5), T0))
+    pick = next(b for b in sent[-1].buttons if b.label == "明天早上")
+    res = core.press(pick.custom_id, ME, T0, channel_id=CHAT)
+    assert res.actions[-1].channel_id == CHAT and core.store.get_reminder(3)["channel_id"] == 1

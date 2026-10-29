@@ -132,11 +132,23 @@ def say(template: str, **values) -> str:
 
 
 class Assistant:
-    def __init__(self, store, tz, owner_id: int | None = None):
+    def __init__(self, store, tz, owner_id: int | None = None, home_channel_id: int | None = None):
         self.store = store
         self.tz = tz
         self.owner_id = owner_id                 # 沒設定 wish_listen_ids 時，只聽這個人的願望
+        self.home_channel_id = home_channel_id   # 提醒一律發到這個頻道（在哪裡 @ 都一樣）
         self.last_intent: Intent | None = None   # 測試網頁顯示「判斷結果」用
+
+    def _home(self, msg: Incoming) -> int:
+        return self.home_channel_id or msg.channel_id
+
+    def _where(self, msg_channel: int, home: int) -> str:
+        """在別的頻道設的提醒，回覆下面標一下會在哪個頻道響。"""
+        return f"\n-# → <#{home}>" if home != msg_channel else ""
+
+    def _ch(self, message_id: int, fallback: int) -> int:
+        """這則訊息在哪個頻道（確認訊息可能在別的頻道，提醒訊息在提醒頻道）。"""
+        return self.store.get_meta(f"msgch:{message_id}") or fallback
 
     def listens_to(self, user_id: int, s: dict) -> bool:
         ids = {int(x) for x in re.findall(r"\d+", str(s.get("wish_listen_ids", "")))}
@@ -269,10 +281,11 @@ class Assistant:
                 return reply("計時功能關著喔。")
             due = now + timedelta(seconds=it.seconds)
             rid = self.store.add_reminder(
-                kind="timer", channel_id=msg.channel_id, creator_id=msg.author.id,
+                kind="timer", channel_id=self._home(msg), creator_id=msg.author.id,
                 targets=[f"u:{msg.author.id}"], text=it.text, due_at=int(due.timestamp()), now=ts,
                 extra={"duration": fmt_seconds(it.seconds)})
-            return reply(self.phrase(s, "timer_phrases", rng, duration=fmt_seconds(it.seconds)), [cancel_button(rid)])
+            return reply(self.phrase(s, "timer_phrases", rng, duration=fmt_seconds(it.seconds))
+                         + self._where(msg.channel_id, self._home(msg)), [cancel_button(rid)])
 
         if it.kind == "note":
             if not s["feature_note"]:
@@ -346,11 +359,13 @@ class Assistant:
         extra = {k: v for k, v in (("verb", it.verb), ("max_count", it.max_count),
                                    ("until", int(it.until.timestamp()) if it.until else None),
                                    ("offset", it.offset), ("event", it.event), ("topic", it.topic)) if v}
-        base = dict(channel_id=msg.channel_id, creator_id=msg.author.id, targets=targets, text=it.text, now=ts)
+        home = self._home(msg)
+        where = self._where(msg.channel_id, home)
+        base = dict(channel_id=home, creator_id=msg.author.id, targets=targets, text=it.text, now=ts)
 
         if it.rain:
             rid = self.store.add_reminder(kind="rain", due_at=FAR_FUTURE, extra=extra, **base)
-            return self._reply(msg, self.phrase(s, "rain_confirm_phrases", rng), confirm_buttons(rid), rid)
+            return self._reply(msg, self.phrase(s, "rain_confirm_phrases", rng) + where, confirm_buttons(rid), rid)
 
         if it.payday:
             extra.update(payday=True, payday_repeat=bool(it.repeat))
@@ -369,7 +384,7 @@ class Assistant:
         rid = self.store.add_reminder(due_at=int(it.when.timestamp()), repeat=it.repeat, extra=extra, **base)
         line = self._confirm_line(it.when, it.repeat, it.phrase, it.dated, targets if others else None,
                                   it.topic, s, now, rng)
-        return self._reply(msg, line, confirm_buttons(rid), rid)
+        return self._reply(msg, line + where, confirm_buttons(rid), rid)
 
     def _confirm_line(self, when, repeat, phrase, dated, others, topic, s, now, rng) -> str:
         """設好提醒的回覆：短、不重述內容。常見提醒用它自己的說法；時間講得很短時偶爾照著講。"""
@@ -458,7 +473,8 @@ class Assistant:
                                   ex.get("topic", ""), s, now, rng)
         out = []
         if draft["message_id"]:
-            out.append(Edit(draft["channel_id"], draft["message_id"]))
+            out.append(Edit(self._ch(draft["message_id"], channel_id), draft["message_id"]))
+        line += self._where(channel_id, draft["channel_id"])
         out.append(Send(channel_id, line, confirm_buttons(draft["id"]), reply_to=reply_to, reminder_id=draft["id"]))
         return out
 
@@ -492,7 +508,8 @@ class Assistant:
         self.store.update_reminder(rem["id"], status="pending", due_at=int(when.timestamp()), nag_count=0)
         out = []
         if rem["message_id"]:
-            out.append(Edit(rem["channel_id"], rem["message_id"], append=f"-# 💤 {timeparse.fmt_dt(when, self.tz)}"))
+            out.append(Edit(self._ch(rem["message_id"], rem["channel_id"]), rem["message_id"],
+                            append=f"-# 💤 {timeparse.fmt_dt(when, self.tz)}"))
         if echo and len(echo) <= SHORT_WHEN + 1 and not re.search(r"\d", echo):
             line = self.phrase(s, "snooze_when_phrases", rng, when=echo)
         else:
@@ -597,7 +614,7 @@ class Assistant:
         return "\n".join(lines) + "\n\n" + self.list_text(user_id, "reminders", None)
 
     # ---------- 按鈕 ----------
-    def press(self, custom_id: str, user: User, now: datetime) -> PressResult:
+    def press(self, custom_id: str, user: User, now: datetime, channel_id: int | None = None) -> PressResult:
         m = re.fullmatch(r"rem:(done|snooze|cancel|pick|snz|undo|stop|view):(\d+)(?::([0-9a-z]+))?", custom_id)
         if not m:
             return PressResult(ephemeral="這個按鈕失效了。")
@@ -633,12 +650,12 @@ class Assistant:
             if rem["status"] != "draft":
                 return PressResult(ephemeral="已經設定好了。")
             when = self._choice_dt(arg or "", now, s)
-            acts = self._finish_draft(rem, when, None, dict(PICKS).get(arg, ""), True, rem["channel_id"], None,
+            acts = self._finish_draft(rem, when, None, dict(PICKS).get(arg, ""), True, channel_id or rem["channel_id"], None,
                                       now, rng)
             return PressResult(append=f"-# {dict(PICKS).get(arg, '')}", actions=[a for a in acts if isinstance(a, Send)])
         if action == "snz":
             when = self._choice_dt(arg or "", now, s)
-            acts = self._apply_snooze(rem, when, dict(PICKS).get(arg, ""), rem["channel_id"], None, s, rng)
+            acts = self._apply_snooze(rem, when, dict(PICKS).get(arg, ""), channel_id or rem["channel_id"], None, s, rng)
             return PressResult(append=f"-# {dict(PICKS).get(arg, '')}", actions=acts)
         if action == "done":
             self.store.update_reminder(rid, status="done")
@@ -707,7 +724,7 @@ class Assistant:
             if rem["nag_count"] >= int(limit) or (parent and (parent["repeat"] or "").startswith("interval:")):
                 continue    # 每幾小時那種本來就很密，不用再催
             if rem["message_id"]:
-                actions.append(Edit(rem["channel_id"], rem["message_id"], clear_buttons=True))
+                actions.append(Edit(self._ch(rem["message_id"], rem["channel_id"]), rem["message_id"], clear_buttons=True))
             self.store.update_reminder(rem["id"], fired_at=ts, nag_count=rem["nag_count"] + 1)
             actions.append(Send(rem["channel_id"], self._fire_text(rem, s, rng, nag=True)[:2000],
                                 fired_buttons(rem["id"], s, repeat=bool(parent and parent["status"] == "pending")),
@@ -777,7 +794,7 @@ class Assistant:
             if old["parent_id"] == rem["id"]:
                 self.store.update_reminder(old["id"], status="expired")
                 if old["message_id"]:
-                    out.append(Edit(old["channel_id"], old["message_id"]))
+                    out.append(Edit(self._ch(old["message_id"], old["channel_id"]), old["message_id"]))
         return out
 
     # ---------- 願望清單 ----------
@@ -840,11 +857,13 @@ class Assistant:
             return f"{days // 7} 週前提到"
         return f"{days // 30} 個月前提到"
 
-    def sent(self, reminder_id: int, message_id: int):
+    def sent(self, reminder_id: int, message_id: int, channel_id: int | None = None):
         """Send 帶 reminder_id 的訊息送出後呼叫：記下訊息編號（延後、再提醒、回答問句要用），
         也記下「這則訊息是哪個提醒」，之後有人回覆這則訊息就知道在講哪個。"""
         self.store.update_reminder(reminder_id, message_id=message_id)
         self.store.set_meta(f"msg:{message_id}", reminder_id)
+        if channel_id:
+            self.store.set_meta(f"msgch:{message_id}", channel_id)
 
     def next_event_at(self, now: datetime) -> datetime | None:
         """測試網頁「跳到下一件事」用：下一個提醒或再提醒的時間。"""

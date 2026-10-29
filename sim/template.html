@@ -63,6 +63,8 @@ code { font-family: var(--font-mono); font-size: 12px; }
 .avatar { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; color: #fff; }
 .who { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; font-size: 14px; }
 .who b.bot { color: var(--bot); }
+.chan { font-size: 11px; border-radius: 4px; padding: 0 5px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+.chan.c1 { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
 .who time, .who .tag { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .who .tag { font-family: var(--font-mono); }
 .who .act { margin-left: auto; border: 0; background: none; color: var(--muted); font-size: 12px; }
@@ -88,7 +90,7 @@ code { font-family: var(--font-mono); font-size: 12px; }
 .replybar { display: flex; gap: 8px; font-size: 13px; color: var(--muted); background: var(--surface-2); padding: 3px 10px; border-radius: 6px; }
 .replybar button { margin-left: auto; border: 0; background: none; color: var(--muted); }
 .row { display: flex; gap: 6px; align-items: center; }
-.row select { flex: none; max-width: 7em; }
+.row select { flex: none; max-width: 6em; }
 .row textarea { flex: 1; min-width: 0; resize: none; height: 40px; }
 .at { display: flex; align-items: center; gap: 3px; font-size: 13px; color: var(--muted); flex: none; }
 .primary { border: 0; background: var(--accent); color: var(--accent-ink); border-radius: 8px; padding: 7px 14px; font-weight: 700; }
@@ -164,6 +166,7 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
       <form class="composer" id="composer">
         <div class="replybar" id="replybar" hidden><span id="replyText"></span><button type="button" id="replyCancel" aria-label="取消回覆">✕</button></div>
         <div class="row">
+          <select id="where" aria-label="哪個頻道"></select>
           <select id="who" aria-label="誰說"></select>
           <label class="at"><input type="checkbox" id="atjvs" checked> @jvs</label>
           <textarea id="input" rows="1" placeholder="說點什麼…" aria-label="訊息"></textarea>
@@ -202,7 +205,7 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
         <div class="pane" data-pane="batch" hidden>
           <div class="inline"><input type="datetime-local" id="batchStart" value="2026-10-29T18:00" aria-label="起始時間"><button class="primary" id="batchRun" type="button">清空並送出</button></div>
           <textarea id="batchText" rows="14" aria-label="批次句子"></textarea>
-          <div class="hint"><code># 標題</code> <code>12. 編號</code> <code>⏩ 30分鐘</code> <code>~ 不@</code> <code>[小明] 換人</code> <code>↩關鍵字：回覆</code></div>
+          <div class="hint"><code># 標題</code> <code>12. 編號</code> <code>⏩ 30分鐘</code> <code>~ 不@</code> <code>[小明] 換人</code> <code>↩關鍵字：回覆</code> <code>【閒聊】換頻道</code></div>
           <div class="sec-title">判斷錯的句子</div>
           <div class="list" id="flagList"></div>
           <textarea id="reportText" rows="5" readonly aria-label="回報內容"></textarea>
@@ -244,6 +247,7 @@ function render(text) {
   // Discord 風格 markdown（bot 會用到的幾種）
   let h = esc(text);
   h = h.replace(/&lt;@&amp;(\d+)&gt;/g, (_, id) => `<span class="mention">@${esc((info.roles.find(r => r.id === +id) || {}).name || id)}</span>`);
+  h = h.replace(/&lt;#(\d+)&gt;/g, (_, id) => `<span class="mention">#${esc((info.channels.find(c => c.id === +id) || {}).name || id)}</span>`);
   h = h.replace(/&lt;@!?(\d+)&gt;/g, (_, id) => `<span class="mention">@${esc(nameOf(id))}</span>`);
   h = h.replace(/~~([\s\S]+?)~~/g, "<s>$1</s>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/__(.+?)__/g, "<u>$1</u>")
        .replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -282,7 +286,7 @@ function drawLog() {
     html += `<article class="msg ${m.ping && pingRe.test(m.text) ? "pinged" : ""}">
       <div class="avatar" style="background:${COLORS[m.author] || "#777"}" aria-hidden="true">${esc(String(nameOf(m.author)).slice(0, 1).toUpperCase())}</div>
       <div style="min-width:0">${ref ? `<div class="replyto">${esc(nameOf(ref.author))}：${esc(plain(ref.text).slice(0, 50))}</div>` : ""}
-        <div class="who"><b class="${isBot ? "bot" : ""}">${esc(nameOf(m.author))}</b><time>${esc(m.time)}</time>${m.tag ? `<span class="tag">${esc(m.tag)}</span>` : ""}${m.ephemeral_for ? '<span class="tag">只有你看得到</span>' : ""}
+        <div class="who"><b class="${isBot ? "bot" : ""}">${esc(nameOf(m.author))}</b><span class="chan c${m.channel}">#${esc((info.channels.find(c => c.id === m.channel) || {}).name || "")}</span><time>${esc(m.time)}</time>${m.tag ? `<span class="tag">${esc(m.tag)}</span>` : ""}${m.ephemeral_for ? '<span class="tag">只有你看得到</span>' : ""}
           ${isBot && !m.ephemeral_for ? `<button class="act" data-reply="${m.id}">回覆</button>` : ""}</div>
         <div class="text">${render(isBot ? m.text : m.text.replace(/^<@1000>\s*/, ""))}</div>${btns}${intent}
       </div></article>`;
@@ -365,12 +369,13 @@ function wire() {
   for (const b of $$("#stabs button, #mtabs button")) b.addEventListener("click", () => setView(b.dataset.view));
   $("#who").innerHTML = info.members.map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join("");
   $("#who").addEventListener("change", e => { me = +e.target.value; drawLog(); });
+  $("#where").innerHTML = info.channels.map(c => `<option value="${c.id}">#${esc(c.name)}</option>`).join("");
 
   $("#composer").addEventListener("submit", e => {
     e.preventDefault();
     const text = $("#input").value.trim();
     if (!text) return;
-    call("say", me, text, replyTo, "", $("#atjvs").checked);
+    call("say", me, text, replyTo, "", $("#atjvs").checked, +$("#where").value);
     $("#input").value = ""; replyTo = null; $("#replybar").hidden = true;
     $("#log").scrollTop = $("#log").scrollHeight;
   });
@@ -436,8 +441,9 @@ function runBatch(text, startLocal) {
       state = JSON.parse(sim.advance(+ff[1] * ({ "小時": 3600, "天": 86400 }[ff[2]] || 60)));
       continue;
     }
-    let rest = line, who = 1, tag = "", mentioned = true, reply = null, mm;
+    let rest = line, who = 1, tag = "", mentioned = true, reply = null, chan = 1, mm;
     if ((mm = rest.match(/^(\d+)[.、)]\s*(.+)$/))) { tag = "#" + mm[1]; rest = mm[2]; }
+    if ((mm = rest.match(/^【(.+?)】\s*(.+)$/))) { const c = info.channels.find(x => x.name === mm[1]); if (c) chan = c.id; rest = mm[2]; }
     if ((mm = rest.match(/^\[(.+?)\]\s*(.+)$/))) { const u = info.members.find(x => x.name === mm[1]); if (u) who = u.id; rest = mm[2]; }
     if ((mm = rest.match(/^↩\s*([^：:]*)[：:]\s*(.+)$/))) {
       // 回覆最近一則含關鍵字的 bot 訊息（沒寫關鍵字＝最近一則有按鈕的）
@@ -447,7 +453,7 @@ function runBatch(text, startLocal) {
       reply = target ? target.id : null; mentioned = false; rest = mm[2];
     }
     if (rest.startsWith("~")) { mentioned = false; rest = rest.slice(1).trim(); }
-    state = JSON.parse(sim.say(who, rest, reply, tag, mentioned));
+    state = JSON.parse(sim.say(who, rest, reply, tag, mentioned, chan));
   }
   draw();
   $("#log").scrollTop = 0;

@@ -11,6 +11,7 @@ DEFAULTS: dict = {
     "feature_timer": True,
     "feature_weather": True,
     "feature_mention_others": True,
+    "all_channels": True,            # 所有頻道都聽、都回；提醒一律發到提醒頻道（CHANNEL_IDS 第一個）
 
     # bot 的口吻：一行一句，每次隨機挑，最近用過的 3 句不會馬上再用
     # 規則：短句（3～12 字）、不重述你說的內容、不加括號說明
@@ -111,6 +112,7 @@ DEFAULTS: dict = {
 LABELS = {
     "feature_reminder": "提醒", "feature_note": "願望清單、記事", "feature_timer": "計時",
     "feature_weather": "天氣", "feature_mention_others": "提醒別人",
+    "all_channels": "所有頻道都回應（提醒發到提醒頻道）",
     "confirm_phrases": "一般", "confirm_when_phrases": "照著講時間 {when}", "confirm_other_phrases": "提醒別人 {who}",
     "repeat_phrases": "重複提醒", "ask_phrases": "一般", "ask_event_phrases": "看事件 {event}",
     "ask_vague_phrases": "太模糊 {vague}", "snooze_phrases": "一般", "snooze_when_phrases": "照著講時間 {when}",
@@ -139,7 +141,8 @@ LABELS = {
 HINTS: dict = {}
 # 設定頁
 GROUPS = [
-    ("功能", ["feature_reminder", "feature_note", "feature_timer", "feature_weather", "feature_mention_others"]),
+    ("功能", ["feature_reminder", "feature_note", "feature_timer", "feature_weather", "feature_mention_others",
+            "all_channels"]),
     ("按鈕", ["btn_done_label", "btn_later_label", "btn_later_minutes", "btn_tomorrow_label", "btn_tomorrow_time",
             "btn_stop_label"]),
     ("時間", ["date_only_time", "time_morning", "time_noon", "time_afternoon", "time_evening", "time_night",
