@@ -80,6 +80,7 @@ class Send:
     reminder_id: int | None = None              # 送出後要記下 message_id（呼叫 core.sent）
     embed: dict | None = None                   # 卡片：title / description / fields / color / footer
     ephemeral: bool = False                     # 只有對方看得到（/ 指令）
+    image: str = ""                             # 附圖：圖庫裡的「分組/檔名」
 
 
 @dataclass
@@ -107,7 +108,7 @@ class NeedWeather:
 
     @property
     def need_current(self) -> bool:
-        return self.purpose != "monitor"
+        return True                             # 背景檢查也順便更新「現在天氣」，打招呼的 {天氣} 用
 
     @property
     def need_week(self) -> bool:
@@ -266,19 +267,53 @@ class Assistant:
         if it.kind != "unknown":
             if s["owner_only"] and not owner:
                 self.last_intent = Intent("refuse", text="不是主人")
-                return self._reply(msg, self.phrase(s, "refuse_phrases", rng))
+                return self._reply(msg, self.phrase(s, "unknown_phrases", rng))
             return self._dispatch(msg, it, s, now, rng)
         if greeted or not clean:
             self.last_intent = Intent("greet")
-            return self._reply(msg, self.greet(s, rng))
+            text, image = self.greet(s, rng, now, msg.author.name)
+            out = self._reply(msg, text)
+            out[0].image = image
+            return out
         if owner and msg.mentioned:
             return self._dispatch(msg, it, s, now, rng)
         return []           # 只是聊天提到名字，不回
 
-    def greet(self, s: dict, rng) -> str:
-        if rng.random() * 100 < float(s["greet_rare_percent"]):
-            return self.phrase(s, "greet_rare_phrases", rng)
-        return self.phrase(s, "greet_phrases", rng)
+    def greet(self, s: dict, rng, now: datetime | None = None, name: str = "") -> tuple[str, str]:
+        """打招呼：回一句（可以用 {時段} {名字} {天氣}），有圖庫就隨機附一張。"""
+        rare = rng.random() * 100 < float(s["greet_rare_percent"])
+        key = "greet_rare_phrases" if rare else "greet_phrases"
+        values = {"時段": self._daypart(now), "名字": name or "", "天氣": self._weather_now(now)}
+        pool = phrases(s, key)
+        if not values["天氣"]:
+            pool = [p for p in pool if "{天氣}" not in p] or pool
+        text = self.pick(key, pool, rng, **values)
+        return text, self.pick_image("rare" if rare else "greet", s, rng)
+
+    def _daypart(self, now: datetime | None) -> str:
+        h = (now or datetime.now(self.tz)).astimezone(self.tz).hour
+        return "早安" if 5 <= h < 11 else "午安" if h < 17 else "晚上好" if h < 23 else "夜深了"
+
+    def _weather_now(self, now: datetime | None) -> str:
+        """最近 3 小時內抓過的現在天氣（每 40 分鐘的背景檢查會更新）。"""
+        w = self.store.get_meta("wx_now")
+        if not w or not now or now.timestamp() - w.get("at", 0) > 3 * 3600:
+            return ""
+        return w["text"]
+
+    def images(self, group: str) -> list[str]:
+        return list((self.store.get_meta("images") or {}).get(group, []))
+
+    def set_images(self, group: str, names: list[str]):
+        allimg = self.store.get_meta("images") or {}
+        allimg[group] = names
+        self.store.set_meta("images", allimg)
+
+    def pick_image(self, group: str, s: dict, rng) -> str:
+        imgs = self.images(group)
+        if not imgs or rng.random() * 100 >= float(s["greet_image_percent"]):
+            return ""
+        return f"{group}/{rng.choice(imgs)}"
 
     def slash(self, name: str, user: User, now: datetime, channel_id: int, arg: str = "",
               settings_url: str = "") -> list:
@@ -289,7 +324,7 @@ class Assistant:
         def say_(text, buttons=None):
             return [Send(channel_id, text, buttons or [], ephemeral=True)]
         if s["owner_only"] and not self.is_owner(user.id):
-            return say_(self.phrase(s, "refuse_phrases", rng))
+            return say_(self.phrase(s, "unknown_phrases", rng))
         if name == "help":
             return say_(HELP)
         if name == "settings":
@@ -907,6 +942,11 @@ class Assistant:
     def weather_result(self, nw: NeedWeather, b, now: datetime) -> list:
         """轉接層抓到天氣（weather.Bundle）之後呼叫。"""
         s = self.store.settings()
+        cur = b.current
+        if cur and (cur.wx or cur.temp is not None) and (nw.purpose != "show" or nw.county == self.location(
+                self.owner_id, s)[0]):
+            text = " ".join(p for p in (cur.wx, f"{cur.temp:.0f}°C" if cur.temp is not None else "") if p)
+            self.store.set_meta("wx_now", {"text": text, "at": int(now.timestamp())})
         rng = random.Random(int(now.timestamp()))
         channel = nw.channel_id or self.home_channel_id
         if nw.purpose == "monitor":

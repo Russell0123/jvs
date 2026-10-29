@@ -135,6 +135,11 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
 .rule { border-top: 1px solid var(--line); padding: 5px 0; display: grid; gap: 1px; font-size: 13px; }
 .rule .kw { color: var(--muted); }
 .sec-title { font-size: 13px; font-weight: 700; color: var(--accent); margin-top: 6px; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.thumbs span { position: relative; }
+.thumbs img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; display: block; }
+.thumbs button { position: absolute; top: -6px; right: -6px; border: 0; border-radius: 50%; width: 18px; height: 18px; padding: 0; font-size: 11px; line-height: 18px; background: var(--surface-2); color: var(--fg); }
+.att { display: block; max-width: min(240px, 100%); max-height: 240px; border-radius: 8px; margin-top: 4px; }
 .empty { color: var(--muted); font-size: 13px; }
 
 .loading { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 20;
@@ -200,6 +205,7 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
         <div class="pane" data-pane="replies" hidden>
           <form id="replyForm" class="list"></form>
           <div class="actions"><button class="primary" type="button" data-save="replies">套用</button><button class="ghost" type="button" data-reset="replies">恢復預設</button><span class="toast" id="repliesToast"></span></div>
+          <div class="list" id="imgPane"></div>
         </div>
 
         <div class="pane" data-pane="logic" hidden>
@@ -303,7 +309,7 @@ function drawLog() {
       <div style="min-width:0">${ref ? `<div class="replyto">${esc(nameOf(ref.author))}：${esc(plain(ref.text).slice(0, 50))}</div>` : ""}
         <div class="who"><b class="${isBot ? "bot" : ""}">${esc(nameOf(m.author))}</b><span class="chan c${m.channel}">#${esc((info.channels.find(c => c.id === m.channel) || {}).name || "")}</span><time>${esc(m.time)}</time>${m.tag ? `<span class="tag">${esc(m.tag)}</span>` : ""}${m.ephemeral_for ? '<span class="tag">只有你看得到</span>' : ""}
           ${isBot && !m.ephemeral_for ? `<button class="act" data-reply="${m.id}">回覆</button>` : ""}</div>
-        ${m.text ? `<div class="text">${render(isBot ? m.text : m.text.replace(/^<@1000>\s*/, ""))}</div>` : ""}${m.embed ? card(m.embed) : ""}${btns}${intent}
+        ${m.text ? `<div class="text">${render(isBot ? m.text : m.text.replace(/^<@1000>\s*/, ""))}</div>` : ""}${m.embed ? card(m.embed) : ""}${m.image ? attachment(m.image) : ""}${btns}${intent}
       </div></article>`;
   }
   log.innerHTML = html || `<div class="empty">還沒有訊息</div>`;
@@ -443,6 +449,16 @@ function wire() {
   });
   $("#noteAdd").addEventListener("submit", e => { e.preventDefault(); call("note_add", $("#noteAddCat").value, $("#noteAddText").value); $("#noteAddText").value = ""; });
 
+  $("#imgPane").addEventListener("change", e => {
+    const g = e.target.dataset.img; if (!g) return;
+    [...e.target.files].forEach((f, i) => { const n = `${Date.now()}${i}-${f.name}`; IMG_URLS[n] = URL.createObjectURL(f); IMG_NAMES[g].push(n); });
+    syncImages(); drawImages(); draw();
+  });
+  $("#imgPane").addEventListener("click", e => {
+    const g = e.target.dataset.imgDel; if (!g) return;
+    IMG_NAMES[g] = IMG_NAMES[g].filter(x => x !== e.target.dataset.name);
+    syncImages(); drawImages(); draw();
+  });
   for (const b of $$("[data-save]")) b.addEventListener("click", () => {
     const pg = b.dataset.save; call("save_settings", readForm(formEl(pg)), pg); $(`#${pg}Toast`).textContent = state.note; drawLogic();
   });
@@ -471,11 +487,24 @@ function drawRain() {
   $("#rainNow").textContent = state.fake_rain == null ? "目前：不下雨。改了之後，下一次檢查（40 分鐘內）就會通知。" : `目前：今天 ${state.fake_rain} 點開始下雨`;
   $("#rainHour").value = state.fake_rain == null ? -1 : state.fake_rain;
 }
+// 圖片只留在瀏覽器（object URL），Python 那邊只記檔名
+const IMG_URLS = {}, IMG_NAMES = { greet: [], rare: [] }, IMG_GROUPS = [["greet", "一般招呼"], ["rare", "稀有招呼"]];
+function attachment(ref) {
+  const url = IMG_URLS[ref.split("/").slice(1).join("/")];
+  return url ? `<img class="att" src="${url}" alt="">` : `<div class="tag">🖼️ ${esc(ref)}</div>`;
+}
+function syncImages() { for (const [g] of IMG_GROUPS) state = JSON.parse(sim.set_images(g, JSON.stringify(IMG_NAMES[g]))); }
+function drawImages() {
+  $("#imgPane").innerHTML = `<div class="sec-title">打招呼的圖片</div><div class="tag">打招呼時從分組隨機挑一張，機率在設定的「叫它」</div>` +
+    IMG_GROUPS.map(([g, n]) => `<label>${n}　<input type="file" accept="image/*" multiple data-img="${g}"></label>
+      <div class="thumbs">${IMG_NAMES[g].map(x => `<span><img src="${IMG_URLS[x]}" alt=""><button type="button" data-img-del="${g}" data-name="${esc(x)}" aria-label="刪除">×</button></span>`).join("")}</div>`).join("");
+}
 function drawForms() { drawForm($("#replyForm"), info.reply_groups); drawForm($("#settingsForm"), info.groups); }
 
 function runBatch(text, startLocal) {
   flags.clear();
   state = JSON.parse(sim.restart(startLocal ? new Date(startLocal + ":00+08:00").getTime() : Date.now()));
+  syncImages();
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (!line || /^#\s*=+\s*$/.test(line)) continue;
@@ -526,7 +555,7 @@ async function boot() {
     info = JSON.parse(sim.info());
     wire();
     state = JSON.parse(sim.state());
-    drawForms(); drawLogic(); setPane("rem"); setView("chat"); drawRain();
+    drawForms(); drawImages(); drawLogic(); setPane("rem"); setView("chat"); drawRain();
     runBatch(PRESET, "2026-10-29T18:00");
     $("#loading").hidden = true;
   } catch (err) {

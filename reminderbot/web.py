@@ -6,11 +6,11 @@ import hmac
 import logging
 from datetime import datetime
 from html import escape
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from aiohttp import web
 
-from . import timeparse
+from . import images, timeparse
 from .explain import describe, rules
 from .router import route
 from .settings import (COUNTIES, DEFAULTS, GROUPS, LABELS, MULTILINE_KEYS, REPLY_GROUPS, REPLY_KEYS, SETTING_KEYS,
@@ -40,13 +40,16 @@ button.small{padding:4px 10px;font-size:13px}button.danger{background:var(--dang
 table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
 th{color:var(--muted);font-weight:500;white-space:nowrap}.wrap table{min-width:600px}td:first-child,td:nth-child(2){white-space:nowrap}.tag{font-size:12px;color:var(--muted)}.wrap{overflow-x:auto}
 .filters{display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:10px}.filters a{color:var(--muted)}.rowform{display:flex;gap:6px;align-items:center;margin:0 0 6px}.rowform input[type=text]{flex:1;min-width:8em}.rowform select{width:auto}.filters a.on{color:var(--accent);font-weight:600}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px}.gallery figure{margin:0}
+.gallery img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:block;margin-bottom:4px}
 """
 
 
 def page(title: str, active: str, body: str, flash: str = "", error: bool = False) -> web.Response:
     nav = "".join(f'<a href="{href}" class="{"on" if key == active else ""}">{name}</a>'
                   for key, href, name in [("reminders", "/reminders", "提醒"), ("notes", "/notes", "清單"),
-                                          ("replies", "/replies", "回覆"), ("logic", "/logic", "判斷"),
+                                          ("replies", "/replies", "回覆"), ("images", "/images", "圖片"),
+                                          ("logic", "/logic", "判斷"),
                                           ("settings", "/", "設定")])
     fl = f'<div class="flash{" err" if error else ""}">{flash}</div>' if flash else ""
     html = (f"<!doctype html><html lang='zh-Hant'><head><meta charset='utf-8'>"
@@ -261,10 +264,66 @@ def make_app(bot) -> web.Application:
                        f"<tr><th>規則</th><th>說明</th><th>關鍵字</th></tr>{rows}</table></div></section>")
         return page("判斷", "logic", "".join(out))
 
+    img_root = images.folder(cfg.db_path)
+
+    async def images_page(request: web.Request):
+        s = bot.store.settings()
+        flash = escape(request.query.get("err", ""))
+        if request.query.get("ok"):
+            flash = f"✅ 上傳了 {escape(request.query['ok'])} 張"
+        out = [f"<p class='tag'>打招呼時從對應的分組隨機挑一張附上，附圖機率 {escape(str(s['greet_image_percent']))}%"
+               "，在「設定 → 叫它」改。稀有招呼沒放圖就不附。</p>"]
+        for g, gname in images.GROUPS.items():
+            names = bot.core.images(g)
+            tiles = "".join(
+                f"<figure><img src='/images/{g}/{escape(n, quote=True)}' loading='lazy' alt=''>"
+                f"<form method='post' action='/images/{g}/{escape(n, quote=True)}/delete' "
+                f"onsubmit=\"return confirm('刪掉這張？')\"><button class='ghost small'>刪除</button></form></figure>"
+                for n in names) or "<p class='tag'>還沒有圖</p>"
+            out.append(f"<section><h2>{gname}（{len(names)} 張）</h2>"
+                       f"<form class='rowform' method='post' action='/images/{g}/upload' enctype='multipart/form-data'>"
+                       f"<input type='file' name='files' accept='image/png,image/jpeg,image/gif,image/webp' multiple required>"
+                       f"<button class='small'>上傳</button></form><div class='gallery'>{tiles}</div></section>")
+        return page("圖片", "images", "".join(out), flash, error=bool(request.query.get("err")))
+
+    async def image_file(request: web.Request):
+        p = images.path_of(img_root, f"{request.match_info['group']}/{request.match_info['name']}")
+        if not p:
+            raise web.HTTPNotFound()
+        return web.FileResponse(p, headers={"Content-Type": images.TYPES.get(p.suffix, "application/octet-stream")})
+
+    async def image_upload(request: web.Request):
+        group = request.match_info["group"]
+        if group not in images.GROUPS:
+            raise web.HTTPNotFound()
+        added, errors = [], []
+        reader = await request.multipart()
+        while (part := await reader.next()) is not None:
+            if part.name != "files" or not part.filename:
+                continue
+            data = await part.read(decode=False)
+            try:
+                added.append(images.save(img_root, group, bytes(data)))
+            except ValueError as e:
+                errors.append(f"{part.filename}：{e}")
+        if added:
+            bot.core.set_images(group, bot.core.images(group) + added)
+        if errors:
+            raise web.HTTPSeeOther("/images?" + urlencode({"err": "沒存到 " + "；".join(errors)}))
+        raise web.HTTPSeeOther(f"/images?ok={len(added)}")
+
+    async def image_delete(request: web.Request):
+        group, name = request.match_info["group"], request.match_info["name"]
+        if group not in images.GROUPS:
+            raise web.HTTPNotFound()
+        images.delete(img_root, group, name)
+        bot.core.set_images(group, [n for n in bot.core.images(group) if n != name])
+        raise web.HTTPSeeOther("/images")
+
     async def health(request: web.Request):
         return web.json_response({"ok": True, "discord_ready": bot.is_ready()})
 
-    app = web.Application(middlewares=[guard])
+    app = web.Application(middlewares=[guard], client_max_size=80 * 1024 * 1024)
     app.add_routes([
         web.get("/", settings_page), web.post("/", save_settings), web.post("/reset", reset_settings),
         web.get("/replies", replies_page), web.post("/replies", save_replies), web.post("/replies/reset", reset_replies),
@@ -273,6 +332,8 @@ def make_app(bot) -> web.Application:
         web.post(r"/reminders/{id:\d+}/edit", reminder_edit),
         web.get("/notes", notes_page), web.post(r"/notes/{id:\d+}/delete", note_delete),
         web.post(r"/notes/{id:\d+}/edit", note_edit), web.post("/notes/add", note_add),
+        web.get("/images", images_page), web.post(r"/images/{group}/upload", image_upload),
+        web.get(r"/images/{group}/{name}", image_file), web.post(r"/images/{group}/{name}/delete", image_delete),
         web.get("/logic", logic_page), web.get("/healthz", health),
     ])
     return app

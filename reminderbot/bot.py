@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from . import weather
+from . import images, weather
 from .config import Config
 from .core import Assistant, Button, Edit, Incoming, NeedWeather, Send, User
 from .store import SqliteStore
@@ -282,6 +282,8 @@ class ReminderBot(discord.Client):
             kwargs["view"] = view
         if a.embed:
             kwargs["embed"] = make_embed(a.embed)
+        if a.image and (p := images.path_of(images.folder(self.config.db_path), a.image)):
+            kwargs["file"] = discord.File(p)
         text = a.text or None
         if source is not None and a.reply_to == source.id:
             msg = await source.reply(text, mention_author=False, **kwargs)

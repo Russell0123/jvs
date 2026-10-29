@@ -143,6 +143,11 @@ class Sim:
         self._add(author=0, text=text)
         return self.state()
 
+    def set_images(self, group: str, names_json: str) -> str:
+        """測試台的圖庫：圖片本身留在瀏覽器，這裡只記檔名。"""
+        self.core.set_images(group, json.loads(names_json))
+        return self.state()
+
     def restart(self, start_ms: float) -> str:
         """清空並把時間設到指定時刻（批次測試要固定起點，結果才能重現）。"""
         self.__init__(start_ms)
@@ -244,6 +249,8 @@ class Sim:
                                 channel=a.channel_id or CHANNEL, ephemeral_for=self._eph if a.ephemeral else None)
                 if a.embed:
                     self._msg(mid)["embed"] = a.embed
+                if a.image:
+                    self._msg(mid)["image"] = a.image
                 if a.reminder_id:
                     self.core.sent(a.reminder_id, mid, a.channel_id)
             elif isinstance(a, Edit):

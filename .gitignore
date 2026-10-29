@@ -7,3 +7,4 @@ data/backups/
 .pytest_cache/
 sim/dist/
 sim/.pyodide-cache/
+data/images/

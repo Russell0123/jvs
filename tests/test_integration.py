@@ -550,7 +550,7 @@ def test_names_greetings_and_owner_only():
     assert talk(MING, "今天天氣不錯") == []                              # 沒叫它
     assert talk(MING, "this is fine") == []                            # 英文名字要整個字
     [(_, r)] = talk(MING, "賈維思 提醒我寫作業")
-    assert r.text in core.store.settings()["refuse_phrases"].splitlines() and not core.store.user_reminders(8)
+    assert r.text in core.store.settings()["unknown_phrases"].splitlines() and not core.store.user_reminders(8)
     [(_, r)] = talk(ME, "嘿賈維斯 提醒我等等去洗澡")
     rem = core.store.user_reminders(7)[0]
     assert rem["text"] == "去洗澡" and rem["due_at"] == int((T0 + timedelta(minutes=90)).timestamp())
@@ -563,7 +563,7 @@ def test_names_greetings_and_owner_only():
 def test_rare_greeting_rate():
     core = Assistant(MemoryStore(), TZ, owner_id=7)
     s = core.store.settings()
-    hits = sum(core.greet(s, random.Random(i)) == "史塔克的肛門" for i in range(2000))
+    hits = sum(core.greet(s, random.Random(i))[0] == "史塔克的肛門" for i in range(2000))
     assert 50 < hits < 160                                             # 約 5%
 
 
@@ -578,7 +578,7 @@ def test_slash_commands():
     [card] = core.weather_result(w, weather.demo_bundle(T0, "臺中市"), T0)
     assert card.ephemeral and card.embed
     [no] = core.slash("help", MING, T0, 5)
-    assert no.ephemeral and no.text in core.store.settings()["refuse_phrases"].splitlines()
+    assert no.ephemeral and no.text in core.store.settings()["unknown_phrases"].splitlines()
 
 
 def test_reply_reschedules_instead_of_new(core):
@@ -624,5 +624,68 @@ async def test_web_edit_reminder(tmp_path):
         assert r.status == 303 and "m=ok" in r.headers["Location"] and store.get_reminder(rid)["text"] == "交期末報告"
         r = await client.post(f"/reminders/{rid}/edit", data={"when": "哈哈", "text": ""}, allow_redirects=False)
         assert "e=" in r.headers["Location"]
+    finally:
+        await client.close()
+
+
+def test_greet_template_and_image(core):
+    core.store.save_settings({"greet_phrases": "{時段}，{名字}！外面{天氣}", "greet_rare_percent": 0})
+    chat = Chat(core)
+    [(_, r)] = chat.say(MING, "賈維斯")
+    # 還沒抓過天氣：含 {天氣} 的句子是唯一一句時照用但不會留下 {天氣}
+    assert "{" not in r.text and r.image == ""
+    b = weather.Bundle("臺北市", "", current=weather.Current("臺北", T0, "多雲", 24.4))
+    core.weather_result(NeedWeather("臺北市", CH), b, T0)
+    [(_, r)] = chat.say(MING, "賈維斯", now=T0 + timedelta(minutes=1))
+    assert r.text == "午安，小明！外面多雲 24°C"
+    [(_, r)] = chat.say(MING, "賈維斯", now=T0 + timedelta(hours=4))     # 天氣太舊就不講
+    assert "°C" not in r.text and r.text.startswith("晚上好")
+    core.set_images("greet", ["a.png", "b.png"])
+    [(_, r)] = chat.say(MING, "賈維斯", now=T0 + timedelta(minutes=2))
+    assert r.image in ("greet/a.png", "greet/b.png")
+    core.store.save_settings({"greet_image_percent": 0})
+    [(_, r)] = chat.say(MING, "賈維斯", now=T0 + timedelta(minutes=3))
+    assert r.image == ""
+
+
+def test_greet_skips_weather_lines_without_weather(core):
+    core.store.save_settings({"greet_phrases": "外面{天氣}\n嘿", "greet_rare_percent": 0})
+    assert all(core.greet(core.store.settings(), random.Random(i), T0, "小明")[0] == "嘿" for i in range(10))
+
+
+def test_refuse_uses_unknown_phrases(core):
+    core.store.save_settings({"unknown_phrases": "蛤"})
+    core.owner_id = 7
+    [(_, r)] = Chat(core).say(MING, "賈維斯 明天提醒我交報告")
+    assert r.text == "蛤"
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+
+
+async def test_web_images(tmp_path):
+    cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path=str(tmp_path / "i.db"), tz=TZ,
+                 web_host="127.0.0.1", web_port=0, admin_email="", web_password="", owner_id=7,
+                 reminder_channel_id=1)
+    store = SqliteStore(cfg.db_path)
+    core = Assistant(store, TZ, owner_id=7)
+    bot = SimpleNamespace(config=cfg, tz=TZ, store=store, core=core, get_user=lambda i: None)
+    client = TestClient(TestServer(make_app(bot)))
+    await client.start_server()
+    try:
+        from aiohttp import FormData
+        form = FormData()
+        form.add_field("files", PNG, filename="a.png", content_type="image/png")
+        form.add_field("files", PNG, filename="b.png", content_type="image/png")
+        form.add_field("files", b"hello", filename="c.txt", content_type="text/plain")
+        r = await client.post("/images/greet/upload", data=form, allow_redirects=False)
+        assert r.status == 303 and "err=" in r.headers["Location"]          # c.txt 不是圖
+        names = core.images("greet")
+        assert len(names) == 2 and (tmp_path / "images" / "greet" / names[0]).read_bytes() == PNG
+        assert names[0] in await (await client.get("/images")).text()
+        assert (await client.get(f"/images/greet/{names[0]}")).status == 200
+        assert (await client.get("/images/greet/..%2Fi.db")).status == 404
+        r = await client.post(f"/images/greet/{names[0]}/delete", allow_redirects=False)
+        assert core.images("greet") == names[1:] and not (tmp_path / "images" / "greet" / names[0]).exists()
     finally:
         await client.close()
