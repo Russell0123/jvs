@@ -27,8 +27,9 @@ class Config:
     web_host: str
     web_port: int
     admin_email: str               # 有填就要求 Cloudflare Access 驗證過的 email 相符
-    web_password: str              # 有填就多一層帳密（帳號 admin）
+    web_password: str              # 有填就要輸入帳密才能進設定網頁
     owner_id: int | None           # 你的 Discord 使用者 ID：沒 @ 也會記錄你的「我想畫…」
+    web_user: str = "admin"        # 設定網頁的帳號
 
 
 def load() -> Config:
@@ -49,5 +50,6 @@ def load() -> Config:
         web_port=int(os.environ.get("WEB_PORT", "8080")),
         admin_email=os.environ.get("ADMIN_EMAIL", "").strip().lower(),
         web_password=os.environ.get("WEB_PASSWORD", ""),
+        web_user=os.environ.get("WEB_USER", "admin").strip() or "admin",
         owner_id=int(os.environ["OWNER_ID"]) if os.environ.get("OWNER_ID", "").strip().isdigit() else None,
     )

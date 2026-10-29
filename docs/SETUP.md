@@ -73,7 +73,19 @@ cd ~/jvs && sudo bash deploy/update.sh
 
 資料庫每天凌晨 4 點自動備份到 `/opt/jvs/data/backups/`，保留 14 天。
 
-## 5. 保護設定網頁
+## 5. 設定網頁
+
+### 最簡單：公開網址＋帳密（不用網域）
+網址會是 `https://你的IP用-連起來.sslip.io`，例如 `https://158-179-177-8.sslip.io`，任何裝置都能開，輸入帳密就能進。
+
+1. Oracle 主控台：☰ → **Networking → Virtual cloud networks** → 點你的 VCN → **Security** 分頁 → **Default Security List**
+   → **Security rules** → **Add Ingress Rules**：Source CIDR `0.0.0.0/0`、IP Protocol `TCP`、Destination port range `80,443` → **Add**
+2. 主機上：`cd ~/jvs && git pull && sudo bash deploy/install.sh && sudo bash deploy/public-web.sh`
+   （會問你要設定的帳號密碼，密碼請用英文和數字）
+3. 等 1 分鐘，打開它印出的網址
+
+### 只有自己的裝置能連
+
 
 設定網頁只聽 VM 自己的 `127.0.0.1:8080`，外面直接連不到。兩種方法擇一：
 

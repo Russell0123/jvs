@@ -71,7 +71,7 @@ def make_app(bot) -> web.Application:
             if auth.startswith("Basic "):
                 try:
                     user, _, pw = base64.b64decode(auth[6:]).decode().partition(":")
-                    ok = user == "admin" and hmac.compare_digest(pw, cfg.web_password)
+                    ok = hmac.compare_digest(user, cfg.web_user) and hmac.compare_digest(pw, cfg.web_password)
                 except Exception:
                     ok = False
             if not ok:

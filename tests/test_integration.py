@@ -514,3 +514,24 @@ async def test_weather_retry():
     core = Assistant(MemoryStore(), TZ, home_channel_id=CH)
     assert core.weather_wait(NeedWeather("臺北市", CH, purpose="monitor")) == []        # 自動的不吵
     assert "5 分鐘" in core.weather_wait(NeedWeather("臺北市", CH, reply_to=3))[0].text
+
+
+async def test_web_basic_auth(tmp_path):
+    import base64
+    cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path="", tz=TZ, web_host="127.0.0.1",
+                 web_port=0, admin_email="", web_password="pw123", owner_id=7, reminder_channel_id=1, web_user="me")
+
+    async def fetch_user(i):
+        raise LookupError
+    bot = SimpleNamespace(config=cfg, tz=TZ, store=SqliteStore(str(tmp_path / "a.db")),
+                          get_user=lambda i: None, fetch_user=fetch_user)
+    client = TestClient(TestServer(make_app(bot)))
+    await client.start_server()
+    try:
+        auth = lambda u, p: {"Authorization": "Basic " + base64.b64encode(f"{u}:{p}".encode()).decode()}  # noqa: E731
+        assert (await client.get("/")).status == 401
+        assert (await client.get("/", headers=auth("me", "wrong"))).status == 401
+        assert (await client.get("/", headers=auth("admin", "pw123"))).status == 401
+        assert (await client.get("/", headers=auth("me", "pw123"))).status == 200
+    finally:
+        await client.close()
