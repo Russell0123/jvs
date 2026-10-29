@@ -483,3 +483,34 @@ def test_any_channel_but_reminders_go_home():
     pick = next(b for b in sent[-1].buttons if b.label == "明天早上")
     res = core.press(pick.custom_id, ME, T0, channel_id=CHAT)
     assert res.actions[-1].channel_id == CHAT and core.store.get_reminder(3)["channel_id"] == 1
+
+
+async def test_weather_retry():
+    waits, told = [], []
+
+    async def sleep(sec):
+        waits.append(sec)
+
+    async def on_wait(err):
+        told.append(str(err))
+
+    calls = {"n": 0}
+
+    async def flaky():                 # 前 4 次失敗，第 5 次成功
+        calls["n"] += 1
+        if calls["n"] < 5:
+            raise weather.WeatherError("逾時")
+        return weather.demo_bundle(T0, "臺北市")
+    b = await weather.fetch_with_retry(flaky, 3, 5, on_wait=on_wait, sleep=sleep)
+    assert b.slots and calls["n"] == 5
+    assert waits == [2, 5, 300, 2] and told == ["逾時"]     # 連試 3 次 → 等 5 分鐘 → 再試
+
+    async def broken():
+        raise weather.WeatherError("壞了")
+    waits.clear()
+    with pytest.raises(weather.WeatherError):
+        await weather.fetch_with_retry(broken, 3, 5, sleep=sleep)
+    assert waits == [2, 5, 300, 2, 5]                           # 兩輪都失敗才回報
+    core = Assistant(MemoryStore(), TZ, home_channel_id=CH)
+    assert core.weather_wait(NeedWeather("臺北市", CH, purpose="monitor")) == []        # 自動的不吵
+    assert "5 分鐘" in core.weather_wait(NeedWeather("臺北市", CH, reply_to=3))[0].text

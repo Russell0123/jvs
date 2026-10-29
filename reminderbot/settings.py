@@ -41,6 +41,7 @@ DEFAULTS: dict = {
     "draft_cancel_phrases": "好，先不設。\nOK，那先不提醒。",
     "no_target_phrases": "現在沒有在響的提醒耶。",
     "location_phrases": "好，改看{place}的天氣。\n收到，你在{place}。",
+    "weather_wait_phrases": "氣象署沒回應，{minutes} 分鐘後再試一次。\n天氣抓不到，等 {minutes} 分鐘再試。",
     "alert_phrases": "{hour}點後可能{what}\n注意，{hour}點後可能{what}",
     "rain_yes_phrases": "{when}可能下雨，降雨 {pop}%。\n{when}會下雨喔，{pop}%。",
     "rain_no_phrases": "{when}應該不會下雨。\n{when}看起來不會下雨。",
@@ -91,6 +92,8 @@ DEFAULTS: dict = {
     "weather_slot_day": "auto",      # 看哪一天：auto（第一個時段之前看今天，之後看明天）／today／tomorrow
     "weather_hot": 32,               # 最高溫幾度以上算熱
     "weather_cold": 16,              # 最低溫幾度以下算冷
+    "weather_retries": 3,            # 抓天氣失敗先連試幾次
+    "weather_retry_wait": 5,         # 都失敗就等幾分鐘再來一輪，還是失敗才回報
     "weather_alert_enabled": True,   # 預報變成會下雨時通知
     "weather_check_minutes": 40,
     "weather_alert_hours": 12,       # 看未來幾小時
@@ -148,6 +151,8 @@ LABELS = {
     "weather_rain_threshold": "降雨機率 % 算下雨",
     "weather_slot_hours": "卡片時段（逗號分隔）", "weather_slot_day": "看哪天（auto／today／tomorrow）",
     "weather_hot": "幾度以上算熱", "weather_cold": "幾度以下算冷",
+    "weather_retries": "失敗先連試幾次", "weather_retry_wait": "都失敗等幾分鐘再試",
+    "weather_wait_phrases": "抓不到時先說一聲",
     "weather_alert_enabled": "預報變成會下雨時通知", "weather_check_minutes": "幾分鐘檢查一次",
     "weather_alert_hours": "看未來幾小時", "weather_quiet": "不通知的時段",
     "location_phrases": "改地點 {place}", "alert_phrases": "天氣變化 {hour} {what}",
@@ -167,7 +172,8 @@ GROUPS = [
             "few_days", "payday"]),
     ("再催", ["nag_enabled", "nag_interval_minutes", "nag_max"]),
     ("天氣", ["weather_daily_enabled", "weather_daily_time", "weather_county", "weather_rain_threshold",
-            "weather_slot_hours", "weather_slot_day", "weather_hot", "weather_cold"]),
+            "weather_slot_hours", "weather_slot_day", "weather_hot", "weather_cold", "weather_retries",
+            "weather_retry_wait"]),
     ("天氣變化通知", ["weather_alert_enabled", "weather_check_minutes", "weather_alert_hours", "weather_quiet"]),
     ("清單", ["wish_lists", "wish_listen_ids", "passive_ack", "suggest_count", "suggest_half_life_days",
             "note_categories"]),
@@ -183,7 +189,7 @@ REPLY_GROUPS = [
     ("取消／完成", ["cancel_phrases", "cancel_all_phrases", "done_phrases", "draft_cancel_phrases", "not_found_phrases"]),
     ("清單", ["wish_acks", "note_phrases", "suggest_phrases", "payday_set_phrases"]),
     ("天氣", ["rain_advice", "hot_advice", "cold_advice", "nice_advice", "rain_yes_phrases", "rain_no_phrases",
-            "alert_phrases", "location_phrases"]),
+            "alert_phrases", "location_phrases", "weather_wait_phrases"]),
     ("常見提醒", ["topics"]),
     ("其他", ["unknown_phrases"]),
 ]

@@ -116,6 +116,33 @@ async def fetch_bundle(api_key: str, county: str, town: str, tz, need_current=Tr
     return b
 
 
+async def fetch_with_retry(fetch, retries: int = 3, wait_minutes: float = 5, on_wait=None, sleep=None):
+    """先連試 retries 次（間隔 2、5、10 秒…）；都失敗就等 wait_minutes 分鐘再來一輪；還是失敗才丟出錯誤。
+
+    fetch：沒有參數的 async 函式，回傳 Bundle；資料是空的也算失敗。
+    on_wait：第一輪失敗、要開始等的時候呼叫（例如先跟使用者說一聲）。
+    """
+    import asyncio
+    sleep = sleep or asyncio.sleep
+    last = None
+    for round_ in range(2):
+        for i in range(max(1, retries)):
+            try:
+                b = await fetch()
+                if b.slots or b.week:
+                    return b
+                last = WeatherError("；".join(b.errors) or "氣象署沒有資料")
+            except WeatherError as e:
+                last = e
+            if i < retries - 1:
+                await sleep((2, 5, 10, 20)[min(i, 3)])
+        if round_ == 0:
+            if on_wait:
+                await on_wait(last)
+            await sleep(wait_minutes * 60)
+    raise last
+
+
 # ---------- 解析（兩種格式都吃） ----------
 
 def _get(d: dict, *keys, default=None):

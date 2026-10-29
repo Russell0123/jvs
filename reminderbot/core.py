@@ -793,6 +793,14 @@ class Assistant:
         text = self._rain_answer(b, day, now, s, rng) if nw.rain_q else ""
         return [Send(channel, text, reply_to=nw.reply_to, embed=self.day_card(b, day, now, s, rng))]
 
+    def weather_wait(self, nw: NeedWeather) -> list:
+        """第一輪重試都失敗、要等幾分鐘時：有人問的才先說一聲，自動的不吵。"""
+        if nw.purpose != "show":
+            return []
+        s = self.store.settings()
+        line = self.phrase(s, "weather_wait_phrases", random.Random(0), minutes=s["weather_retry_wait"])
+        return [Send(nw.channel_id or self.home_channel_id, line, reply_to=nw.reply_to)] if line else []
+
     def weather_error(self, nw: NeedWeather, err: str) -> list:
         if nw.purpose != "show":
             return []

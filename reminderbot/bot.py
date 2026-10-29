@@ -1,6 +1,7 @@
 """Discord 轉接層：把 Discord 的訊息／按鈕轉給 core.Assistant，再把它回傳的動作做出來。"""
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 
@@ -72,6 +73,8 @@ class ReminderBot(discord.Client):
         self.core = Assistant(self.store, self.tz, owner_id=config.owner_id,
                               home_channel_id=config.reminder_channel_id)
         self.web_runner = None
+        self._tasks: set = set()         # 背景的天氣查詢
+        self._monitoring = False         # 天氣變化檢查還在跑就不重複開
 
     def now(self) -> datetime:
         return datetime.now(self.tz)
@@ -170,20 +173,47 @@ class ReminderBot(discord.Client):
             self.core.sent(a.reminder_id, msg.id, msg.channel.id)
 
     async def _weather(self, a: NeedWeather, source: discord.Message | None, raise_errors: bool = False):
-        try:
-            b = await weather.fetch_bundle(self.config.cwa_api_key, a.county, a.town, self.tz,
-                                           need_current=a.need_current, need_week=a.need_week)
-            if b.errors:
-                log.warning("天氣部分資料沒抓到：%s", b.errors)
-            actions = self.core.weather_result(a, b, self.now())
-        except weather.WeatherError as e:
-            if raise_errors:
-                raise
-            log.warning("天氣查詢失敗：%s", e)
-            actions = self.core.weather_error(a, str(e))
-        for act in actions:
-            if isinstance(act, Send):
+        """抓天氣：失敗先連試幾次，都失敗等幾分鐘再一輪（在背景跑，不會卡住提醒）。"""
+        if a.purpose == "monitor":
+            if self._monitoring:
+                return
+            self._monitoring = True
+        s = self.store.settings()
+
+        async def fetch():
+            return await weather.fetch_bundle(self.config.cwa_api_key, a.county, a.town, self.tz,
+                                              need_current=a.need_current, need_week=a.need_week)
+
+        async def on_wait(err):
+            log.warning("天氣第一輪重試失敗（%s），%s 分鐘後再試", err, s["weather_retry_wait"])
+            for act in self.core.weather_wait(a):
                 await self._send(act, source)
+
+        async def job():
+            try:
+                b = await weather.fetch_with_retry(fetch, int(s["weather_retries"]), float(s["weather_retry_wait"]),
+                                                   on_wait=on_wait)
+                if b.errors:
+                    log.warning("天氣部分資料沒抓到：%s", b.errors)
+                actions = self.core.weather_result(a, b, self.now())
+            except weather.WeatherError as e:
+                if raise_errors:
+                    raise
+                log.warning("天氣查詢失敗：%s", e)
+                actions = self.core.weather_error(a, str(e))
+            finally:
+                if a.purpose == "monitor":
+                    self._monitoring = False
+            for act in actions:
+                if isinstance(act, Send):
+                    await self._send(act, source)
+
+        if raise_errors:
+            await job()             # 設定網頁的「貼一次天氣」要等結果
+        else:
+            task = asyncio.create_task(job())
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
 
     async def post_weather_now(self):
         """設定網頁的「貼一次天氣」。"""
