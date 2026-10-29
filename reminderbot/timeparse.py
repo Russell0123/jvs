@@ -80,6 +80,7 @@ class ParseResult:
     spans: list[tuple[int, int]] = field(default_factory=list)
     matched: bool = False               # 句子裡有沒有任何時間相關的字
     dated: bool = False                 # 有沒有講到哪一天（沒有的話回覆要補「明天」之類的）
+    timed: bool = False                 # 有沒有講到時刻、相對時間或重複（只說「今天」「明天」不算）
     error: str | None = None
 
     def phrase(self, text: str) -> str:
@@ -277,7 +278,8 @@ def parse(text: str, now: datetime, period_times: dict[str, str] | None = None,
 
     # 有任何時間片段被用到才算有時間
     res = ParseResult(spans=sc.spans, repeat=repeat, matched=bool(sc.spans),
-                      dated=bool(target_date or weekday or day_offset is not None or month_offset or rel or repeat))
+                      dated=bool(target_date or weekday or day_offset is not None or month_offset or rel or repeat),
+                      timed=bool(hour is not None or period or rel or repeat))
     if not res.matched:
         return res
     if hour is not None and not (0 <= hour <= 24 and 0 <= minute <= 59):

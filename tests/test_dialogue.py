@@ -94,5 +94,6 @@ def test_snoozes_hit_the_latest_fired_reminder():
     sim.say(1, "十分鐘後提醒我關瓦斯")
     sim.advance(15 * 60)
     st = json.loads(sim.say(1, "這個提醒延到明天早上"))
-    reply = st["messages"][-1]["text"]
-    assert "明天早上" in reply and "10/30（五）09:00" in reply
+    assert st["messages"][-1]["text"] in ("好，明天早上再叫你。", "OK，明天早上再說。")
+    rem = next(r for r in st["reminders"] if r["text"] == "關瓦斯")
+    assert rem["when"] == "10/30（五）09:00" and rem["status"] == "pending"

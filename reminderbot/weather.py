@@ -73,17 +73,11 @@ def _dt(s: str, tz) -> datetime:
     return datetime.fromisoformat(s.replace(" ", "T")).replace(tzinfo=None).replace(tzinfo=tz)
 
 
-def format_report(county: str, periods: list[Period], rain_threshold: int, now: datetime) -> str:
-    lines = [f"🌤️ **{county} 天氣**"]
+def format_report(county: str, periods: list[Period], now: datetime, advice: str) -> str:
+    """短短幾行預報，最後一定是一句行動建議。"""
+    lines = [f"🌤️ **{county}**"]
     for p in periods[:3]:
-        lines.append(f"・{p.label(now)}（{p.start:%H}–{p.end:%H} 時）：{p.wx}，"
-                     f"{p.min_t}–{p.max_t}°C，降雨機率 {p.pop}%，{p.ci}")
-    first = periods[0]
-    if max(p.pop for p in periods[:2]) >= rain_threshold:
-        lines.append("☔ 降雨機率偏高，出門記得帶傘！")
-    if first.min_t <= 15:
-        lines.append("🧥 有點冷，多穿一件。")
-    elif first.max_t >= 33:
-        lines.append("🥵 很熱，記得補充水分。")
-    lines.append("-# 資料來源：中央氣象署")
+        lines.append(f"・{p.label(now)} {p.wx} {p.min_t}–{p.max_t}°C ☔{p.pop}%")
+    lines.append(advice)
+    lines.append("-# 中央氣象署")
     return "\n".join(lines)

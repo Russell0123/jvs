@@ -17,8 +17,8 @@ DIST = SIM / "dist"
 CACHE = SIM / ".pyodide-cache"
 PYODIDE_VERSION = "0.26.4"
 PYODIDE_FILES = ["pyodide.js", "pyodide.asm.js", "pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json"]
-SOURCES = ["reminderbot/__init__.py", "reminderbot/timeparse.py", "reminderbot/router.py", "reminderbot/settings.py",
-           "reminderbot/core.py", "reminderbot/store.py", "reminderbot/weather.py"]
+# 瀏覽器裡沒有 discord.py／aiohttp，這幾個不打包；其他 reminderbot/*.py 全部塞進網頁
+SKIP = {"bot.py", "web.py", "config.py", "__main__.py"}
 
 
 def fetch_pyodide():
@@ -35,7 +35,8 @@ def fetch_pyodide():
 
 def main():
     fetch_pyodide()
-    src = {path: (ROOT / path).read_text(encoding="utf-8") for path in SOURCES}
+    src = {f"reminderbot/{p.name}": p.read_text(encoding="utf-8")
+           for p in sorted((ROOT / "reminderbot").glob("*.py")) if p.name not in SKIP}
     src["simbridge.py"] = (SIM / "simbridge.py").read_text(encoding="utf-8")
     payload = json.dumps(src, ensure_ascii=False).replace("</", "<\\/")
     preset = json.dumps((SIM / "preset.txt").read_text(encoding="utf-8"), ensure_ascii=False).replace("</", "<\\/")

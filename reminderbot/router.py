@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 
 from . import timeparse
-from .settings import find_county, note_categories, wish_lists, wish_verb
+from .settings import find_county, note_categories, topics, wish_lists, wish_verb
 from .timeparse import NUM, cn2int
 
 HELP_RE = r"^\s*(help|說明|幫助|怎麼用|使用說明|指令|功能|你會什麼|你可以做什麼)\s*[?？]?\s*$"
@@ -28,7 +28,7 @@ RAIN_RE = r"下雨(天|的時候|的話|時)|會下雨(的話|時)?|雨天"
 LATER_RE = r"晚點|待會|等一下|等等"
 VAGUE_RE = r"有空(的時候|時)?|有時間(的時候)?|之後|以後|改天|找個?時間|找個\S{0,2}|哪天|回頭"
 EVENTS = (r"出門|到家|回家|回到(?:宿舍|家|學校|公司|房間)?|吃完(?:飯|午餐|晚餐|早餐|東西)?|吃飽|"
-          r"看完(?:影片|電影|書|劇)?|開完(?:會)?|下班|下課|放學|睡醒|起床|洗完澡|忙完|做完|寫完|弄完|運動完|回來")
+          r"看完(?:影片|電影|書|劇)?|開完(?:會)?|下班|下課|放學|睡醒|睡覺|睡(?!醒)|起床|洗完澡|忙完|做完|寫完|弄完|運動完|回來")
 EVENT_RE = (rf"({EVENTS})\s*((?:{NUM}|半)\s*個?\s*半?\s*(?:分鐘|分|小時|鐘頭))?\s*"
             r"(之前|以前|前|之後|以後|後|的時候|時|再)")
 WISH_PREFIX = r"^(我)?(突然|最近|好|很|一直|有點|真的|超)?想"
@@ -120,6 +120,7 @@ class Intent:
     keyword: str = ""               # cancel_match：用內容找
     all: bool = False               # cancel_match：所有
     wishes: list = field(default_factory=list)   # wish：記下的願望
+    topic: str = ""                 # 常見提醒（休息、喝水…），回覆和觸發用固定說法
 
 
 def route(text: str, now: datetime, settings: dict) -> Intent:
@@ -187,7 +188,9 @@ def route(text: str, now: datetime, settings: dict) -> Intent:
 
 
     later = re.search(LATER_RE, body)
-    if not (is_reminder_word or parsed.matched or later):
+    # 沒說「提醒」也算提醒：講了時刻／相對時間（「12點睡覺」「半小時後吃飯」），或內容是常見提醒
+    loose_topic = match_topic(clean_reminder_text(parsed.strip(body)), settings) if parsed.matched else None
+    if not (is_reminder_word or later or (parsed.matched and (parsed.timed or loose_topic))):
         if re.search(LIST_RE, text):
             return Intent("list", scope="all")
         return Intent("unknown")
@@ -203,7 +206,10 @@ def route(text: str, now: datetime, settings: dict) -> Intent:
         leftover = leftover.replace(vague.group(0), " ", 1)
     if later and not parsed.matched:
         leftover = leftover.replace(later.group(0), " ", 1)
-    it.text = second_person(clean_reminder_text(leftover))
+    content = clean_reminder_text(leftover)
+    it.text = second_person(content)
+    if topic := match_topic(content, settings):
+        it.topic, it.text = topic.name, topic.name
 
     if re.search(RAIN_RE, body):
         it.rain = True
@@ -231,7 +237,30 @@ def route(text: str, now: datetime, settings: dict) -> Intent:
         it.ask = "none"
         return it
     it.when, it.repeat, it.phrase, it.dated = parsed.when, parsed.repeat, parsed.phrase(body), parsed.dated
+    if it.topic == "休息" and it.when.hour == 12 and not re.search(r"中午|下午|午", it.phrase):
+        # 「12點睡覺」是半夜 12 點
+        midnight = datetime.combine(it.when.date(), time(0, 0), it.when.tzinfo)
+        it.when = midnight if midnight > now else midnight + timedelta(days=1)
+    if it.repeat and it.repeat.startswith("interval:") and not it.until:
+        # 一天之內的循環（每兩小時、每 30 分鐘）只循環當天
+        it.until = datetime.combine(it.when.astimezone(now.tzinfo).date(), time(23, 59, 59), now.tzinfo)
     return it
+
+
+TOPIC_FILLER = r"^(我|你|要|去|該|來|得|先|好好|準備)+|(一下|一會|一會兒|了|囉|吧|啦)+$"
+
+
+def match_topic(content: str, settings: dict):
+    """內容基本上就是「睡覺」「喝點水」「吃午餐」這種常見提醒時，回傳那個 Topic。"""
+    c = re.sub(TOPIC_FILLER, "", content.replace(" ", "")).strip()
+    c = re.sub(TOPIC_FILLER, "", c)
+    if not c:
+        return None
+    for t in topics(settings):
+        for k in sorted(t.keywords, key=len, reverse=True):
+            if c == k or (c.startswith(k) and len(c) - len(k) <= 2) or (c.endswith(k) and len(c) - len(k) <= 1):
+                return t
+    return None
 
 
 # ---------- 各種意圖 ----------
@@ -323,13 +352,13 @@ def _note(text: str, note_word: str | None, cats) -> Intent:
     body = re.sub(r"^(先|幫我|麻煩|請)+", "", body).strip()
     body = _strip_category_word(body, cats)
     if not body or re.fullmatch(r"(這個|那個|剛剛那個)?\s*(想法|點子|東西|靈感)?", body):
-        return Intent("note", error="要記什麼呢？直接跟我說內容，我幫你收起來～")
+        return Intent("note", error="要記什麼？")
     return Intent("note", category=category, text=body)
 
 
 # ---------- 文字整理 ----------
 
-_LEAD = r"^[\s,，。.:：、!！~～\-]*((請|幫我|麻煩|記得|要|的時候|跟|和|再|就|然後|，|,)\s*)*"
+_LEAD = r"^[\s,，。.:：、!！~～\-]*((請|幫我|麻煩|記得|我要|我得|我該|我會|我應該|要|的時候|跟|和|再|就|然後|，|,)\s*)*"
 _TAIL = r"(\s*(喔|哦|噢|唷|呦|啦|吧|呀|哈|謝謝|謝啦|thx|thanks|好嗎|好不好|一下|[,，。.!！~～?？]))+\s*$"
 
 

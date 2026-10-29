@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 from aiohttp import web
 
 from . import timeparse
+from .explain import describe, rules
+from .router import route
 from .settings import COUNTIES, DEFAULTS, GROUPS, HINTS, LABELS, MULTILINE_KEYS, note_categories, validate, wish_lists
 
 log = logging.getLogger(__name__)
@@ -43,7 +45,7 @@ th{color:var(--muted);font-weight:500;white-space:nowrap}.wrap table{min-width:6
 def page(title: str, active: str, body: str, flash: str = "", error: bool = False) -> web.Response:
     nav = "".join(f'<a href="{href}" class="{"on" if key == active else ""}">{name}</a>'
                   for key, href, name in [("settings", "/", "設定"), ("reminders", "/reminders", "提醒"),
-                                          ("notes", "/notes", "清單")])
+                                          ("notes", "/notes", "清單"), ("logic", "/logic", "判斷邏輯")])
     fl = f'<div class="flash{" err" if error else ""}">{flash}</div>' if flash else ""
     html = (f"<!doctype html><html lang='zh-Hant'><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width,initial-scale=1'><title>{escape(title)}</title>"
@@ -206,6 +208,25 @@ def make_app(bot) -> web.Application:
         bot.store.delete_note(int(request.match_info["id"]))
         raise web.HTTPSeeOther(request.headers.get("Referer") or "/notes")
 
+    async def logic_page(request: web.Request):
+        s = bot.store.settings()
+        q = request.query.get("q", "").strip()
+        result = ""
+        if q:
+            d = describe(route(q, datetime.now(bot.tz), s), bot.tz)
+            result = (f"<div class='flash'><b>判斷：{escape(d['label'])}</b><br>{escape(d['detail']) or '（沒有細節）'}</div>")
+        out = [f"<section><h2>試一句</h2><form class='rowform' method='get'><input type='text' name='q' "
+               f"value='{escape(q, quote=True)}' placeholder='例如：每兩小時提醒我喝水'><button class='small'>看判斷</button>"
+               f"</form>{result}<p class='tag'>只是看 bot 會怎麼理解，不會真的建立提醒。</p></section>"]
+        for sec in rules(s):
+            rows = "".join(f"<tr><td><b>{escape(n)}</b></td><td>{escape(d)}</td><td>{escape('、'.join(w))}</td></tr>"
+                           for n, d, w in sec["steps"])
+            out.append(f"<section><h2>{escape(sec['title'])}</h2><div class='wrap'><table>"
+                       f"<tr><th>規則</th><th>說明</th><th>關鍵字</th></tr>{rows}</table></div></section>")
+        out.append("<p class='tag'>常見提醒、願望清單、記事分類和 bot 的說法可以在「設定」頁改；"
+                   "其他規則要改程式（跟 Claude 說就好）。</p>")
+        return page("判斷邏輯", "logic", "".join(out))
+
     async def health(request: web.Request):
         return web.json_response({"ok": True, "discord_ready": bot.is_ready()})
 
@@ -216,7 +237,7 @@ def make_app(bot) -> web.Application:
         web.get("/reminders", reminders_page), web.post(r"/reminders/{id:\d+}/cancel", reminder_cancel),
         web.get("/notes", notes_page), web.post(r"/notes/{id:\d+}/delete", note_delete),
         web.post(r"/notes/{id:\d+}/edit", note_edit), web.post("/notes/add", note_add),
-        web.get("/healthz", health),
+        web.get("/logic", logic_page), web.get("/healthz", health),
     ])
     return app
 

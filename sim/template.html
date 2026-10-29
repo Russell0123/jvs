@@ -93,7 +93,8 @@ button { cursor: pointer; }
 
 .side { min-height: 0; overflow-y: auto; background: var(--surface); }
 .side-tabs { position: sticky; top: 0; display: flex; gap: 2px; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--line); z-index: 1; }
-.side-tabs button { border: 0; background: none; padding: 6px 10px; border-radius: 8px; color: var(--muted); }
+.side-tabs { overflow-x: auto; }
+.side-tabs button { border: 0; background: none; padding: 6px 10px; border-radius: 8px; color: var(--muted); white-space: nowrap; flex: none; }
 .side-tabs button.on { background: var(--surface-2); color: var(--fg); font-weight: 700; }
 .pane { padding: 16px; padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 14px; align-content: start; }
 .pane h3 { margin: 0; font-size: 14px; }
@@ -127,6 +128,11 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
 .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .atjvs { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); flex: none; padding-bottom: 10px; }
 .item .inline select { flex: none; max-width: 6em; }
+.rule { border-top: 1px solid var(--line); padding: 6px 0; display: grid; gap: 2px; font-size: 13px; }
+.rule b { font-size: 13px; }
+.rule .kw { color: var(--muted); }
+.logic-sec { display: grid; gap: 2px; margin-top: 10px; }
+.logic-sec h4 { margin: 4px 0; font-size: 13px; color: var(--accent); }
 .casetag { font-family: var(--font-mono); font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .report textarea { width: 100%; min-height: 160px; border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 8px; font-size: 13px; }
 .flagitem { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
@@ -168,6 +174,7 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
       <button data-view="notes">清單</button>
       <button data-view="settings">設定</button>
       <button data-view="batch">批次</button>
+      <button data-view="logic">邏輯</button>
       <button data-view="report">回報</button>
     </nav>
   </header>
@@ -195,6 +202,7 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
         <button data-view="notes">清單</button>
         <button data-view="settings">設定</button>
         <button data-view="batch">批次</button>
+        <button data-view="logic">邏輯</button>
         <button data-view="report">回報</button>
       </div>
 
@@ -248,6 +256,14 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
         <textarea id="batchText" class="batch" aria-label="批次句子"></textarea>
         <button class="primary" id="batchRun" type="button">清空並依序送出</button>
         <div class="toast" id="batchToast" aria-live="polite"></div>
+      </div>
+
+      <div class="pane" data-pane="logic" hidden>
+        <h3>判斷邏輯</h3>
+        <p>bot 由上往下判斷，先符合的就是答案。關鍵字直接從程式產生，跟正式後台的「判斷邏輯」頁一樣。</p>
+        <form class="inline" id="tryForm"><input id="tryText" placeholder="試一句，例如：每兩小時提醒我喝水" aria-label="試一句"><button class="ghost">看判斷</button></form>
+        <div class="intent" id="tryResult"></div>
+        <div id="logicBody"></div>
       </div>
 
       <div class="pane report" data-pane="report" hidden>
@@ -361,6 +377,12 @@ function drawReminders() {
       ${r.parent ? `<span>第 #${r.parent} 的其中一次</span>` : ""}<span>${esc(r.creator)} → ${esc(r.targets.join("、"))}</span>${r.nags ? `<span>再提醒 ${r.nags} 次</span>` : ""}</div></div>`);
   $("#remList").innerHTML = rows.join("") || "<p>還沒有提醒。</p>";
 }
+function drawLogic() {
+  const secs = JSON.parse(sim.logic());
+  $("#logicBody").innerHTML = secs.map(sec => `<div class="logic-sec"><h4>${esc(sec.title)}</h4>${sec.steps.map(([n, d, w]) =>
+    `<div class="rule"><b>${esc(n)}</b>${d ? `<span>${esc(d)}</span>` : ""}${w.length ? `<span class="kw">${esc(w.join("、"))}</span>` : ""}</div>`).join("")}</div>`).join("");
+}
+
 function drawNotes() {
   const opts = cur => state.lists.map(c => `<option ${c === cur ? "selected" : ""}>${esc(c)}</option>`).join("");
   $("#noteAddCat").innerHTML = opts($("#noteAddCat").value || state.lists[0]);
@@ -418,6 +440,11 @@ function wire() {
     if (e.target.matches("[data-note-del]")) call("note_delete", id);
     if (e.target.matches("[data-note-save]")) call("note_update", id, row.querySelector("select").value, row.querySelector("input").value);
   });
+  $("#tryForm").addEventListener("submit", e => {
+    e.preventDefault();
+    const d = JSON.parse(sim.explain($("#tryText").value));
+    $("#tryResult").innerHTML = d ? `<span class="pill ${d.kind === "unknown" ? "unknown" : ""}">判斷：${esc(d.label)}</span><span class="detail">${esc(d.detail)}</span>` : "";
+  });
   $("#noteAdd").addEventListener("submit", e => { e.preventDefault(); call("note_add", $("#noteAddCat").value, $("#noteAddText").value); $("#noteAddText").value = ""; });
   $("#examples").innerHTML = EXAMPLES.map(t => `<button type="button">${esc(t)}</button>`).join("");
   $("#examples").addEventListener("click", e => { if (e.target.tagName === "BUTTON") { $("#input").value = e.target.textContent; $("#input").focus(); } });
@@ -461,7 +488,7 @@ function wire() {
     if (!armed) { armed = true; e.target.textContent = "再按一次確定清空"; setTimeout(() => { armed = false; e.target.textContent = "清空對話和資料，重新開始"; }, 3000); return; }
     armed = false; e.target.textContent = "清空對話和資料，重新開始"; flags.clear(); call("clear");
   });
-  $("#saveSettings").addEventListener("click", () => { call("save_settings", readSettings()); $("#settingsToast").textContent = state.note; });
+  $("#saveSettings").addEventListener("click", () => { call("save_settings", readSettings()); drawLogic(); $("#settingsToast").textContent = state.note; });
   $("#resetSettings").addEventListener("click", () => { call("reset_settings"); $("#settingsForm").dataset.ready = ""; drawSettings(); $("#settingsToast").textContent = state.note; });
   for (const b of $$("#tabs button, #sideTabs button")) b.addEventListener("click", () => setView(b.dataset.view));
   $("#batchText").value = PRESET;
@@ -529,6 +556,7 @@ async function boot() {
     wire();
     state = JSON.parse(sim.state());
     runBatch(PRESET, "2026-10-29T18:00");
+    drawLogic();
     $("#loading").hidden = true;
   } catch (err) {
     $("#loadErr").hidden = false;

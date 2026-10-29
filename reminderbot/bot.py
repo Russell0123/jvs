@@ -151,10 +151,9 @@ class ReminderBot(discord.Client):
             self.core.sent(a.reminder_id, msg.id)
 
     async def _weather(self, a: NeedWeather, source: discord.Message | None, raise_errors: bool = False):
-        s = self.store.settings()
         try:
             periods = await weather.fetch(self.config.cwa_api_key, a.county, self.tz)
-            text = weather.format_report(a.county, periods, s["weather_rain_threshold"], self.now())
+            text = self.core.weather_text(a.county, periods, self.now())
             if a.rain_check:
                 await self.run_actions(self.core.rain_check(periods, self.now()))
             if not a.post:
