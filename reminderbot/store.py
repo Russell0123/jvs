@@ -35,7 +35,10 @@ CREATE TABLE IF NOT EXISTS notes (
     user_id     INTEGER NOT NULL,
     category    TEXT NOT NULL,
     text        TEXT NOT NULL,
-    created_at  INTEGER NOT NULL
+    created_at  INTEGER NOT NULL,
+    mentioned_at INTEGER,                           -- 最後一次提到（願望清單挑選用）
+    mentions    INTEGER NOT NULL DEFAULT 1,         -- 提過幾次
+    credit      REAL NOT NULL DEFAULT 0             -- 輪流挑選的累積分數
 );
 CREATE INDEX IF NOT EXISTS idx_notes_user ON notes(user_id, category);
 
@@ -121,15 +124,23 @@ class MemoryStore:
     def add_note(self, user_id, category, text, now) -> int:
         self._nid += 1
         self._notes[self._nid] = dict(id=self._nid, user_id=user_id, category=category, text=text,
-                                      created_at=int(now))
+                                      created_at=int(now), mentioned_at=int(now), mentions=1, credit=0.0)
         return self._nid
+
+    def get_note(self, note_id):
+        n = self._notes.get(note_id)
+        return dict(n) if n else None
+
+    def update_note(self, note_id, **fields):
+        if note_id in self._notes:
+            self._notes[note_id].update(fields)
 
     def user_notes(self, user_id, category=None):
         rows = [dict(n) for n in self._notes.values()
                 if n["user_id"] == user_id and (category is None or n["category"] == category)]
         return rows if category else sorted(rows, key=lambda n: (n["category"], n["id"]))
 
-    def all_notes(self, limit=500):
+    def all_notes(self, limit=1000):
         return [dict(n) for n in sorted(self._notes.values(), key=lambda n: -n["id"])][:limit]
 
     def delete_note(self, note_id, user_id=None) -> bool:
@@ -150,6 +161,14 @@ class SqliteStore:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        # 舊資料庫補欄位
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(notes)")}
+        for col, ddl in [("mentioned_at", "INTEGER"), ("mentions", "INTEGER NOT NULL DEFAULT 1"),
+                         ("credit", "REAL NOT NULL DEFAULT 0")]:
+            if col not in cols:
+                self.conn.execute(f"ALTER TABLE notes ADD COLUMN {col} {ddl}")
+        self.conn.execute("UPDATE notes SET mentioned_at = created_at WHERE mentioned_at IS NULL")
+        self.conn.commit()
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.commit()
         self._cache: dict | None = None
@@ -235,8 +254,16 @@ class SqliteStore:
 
     # 記事
     def add_note(self, user_id, category, text, now) -> int:
-        return self._write("INSERT INTO notes(user_id, category, text, created_at) VALUES(?,?,?,?)",
-                           (user_id, category, text, int(now))).lastrowid
+        return self._write("INSERT INTO notes(user_id, category, text, created_at, mentioned_at) VALUES(?,?,?,?,?)",
+                           (user_id, category, text, int(now), int(now))).lastrowid
+
+    def get_note(self, note_id):
+        rows = self._all("SELECT * FROM notes WHERE id = ?", (note_id,))
+        return dict(rows[0]) if rows else None
+
+    def update_note(self, note_id, **fields):
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        self._write(f"UPDATE notes SET {sets} WHERE id = ?", (*fields.values(), note_id))
 
     def user_notes(self, user_id, category=None):
         if category:
@@ -246,7 +273,7 @@ class SqliteStore:
             rows = self._all("SELECT * FROM notes WHERE user_id = ? ORDER BY category, id", (user_id,))
         return [dict(r) for r in rows]
 
-    def all_notes(self, limit=500):
+    def all_notes(self, limit=1000):
         return [dict(r) for r in self._all("SELECT * FROM notes ORDER BY id DESC LIMIT ?", (limit,))]
 
     def delete_note(self, note_id, user_id=None) -> bool:

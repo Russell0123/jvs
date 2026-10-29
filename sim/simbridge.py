@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from reminderbot import timeparse, weather
 from reminderbot.core import Assistant, Edit, Incoming, NeedWeather, Send, User
-from reminderbot.settings import COUNTIES, DEFAULTS, GROUPS, HINTS, LABELS, validate
+from reminderbot.settings import COUNTIES, DEFAULTS, GROUPS, HINTS, LABELS, MULTILINE_KEYS, note_categories, validate, wish_lists
 from reminderbot.store import MemoryStore
 
 TZ = timezone(timedelta(hours=8))
@@ -27,7 +27,7 @@ ROLES = {50: "樂團"}
 class Sim:
     def __init__(self, start_ms: float):
         self.store = MemoryStore()
-        self.core = Assistant(self.store, TZ)
+        self.core = Assistant(self.store, TZ, owner_id=1)     # 「你」是 bot 的主人
         self.now = datetime.fromtimestamp(start_ms / 1000, TZ).replace(second=0, microsecond=0)
         self.messages: list[dict] = []
         self.next_id = 1
@@ -40,16 +40,19 @@ class Sim:
             "roles": [{"id": k, "name": v} for k, v in ROLES.items()],
             "bot": {"id": BOT_ID, "name": "jvs"},
             "defaults": DEFAULTS, "labels": LABELS, "hints": HINTS, "groups": GROUPS, "counties": COUNTIES,
+            "multiline": MULTILINE_KEYS,
         }, ensure_ascii=False)
 
-    def say(self, user_id: int, text: str, reply_to: int | None = None, tag: str = "") -> str:
+    def say(self, user_id: int, text: str, reply_to: int | None = None, tag: str = "", mentioned: bool = True) -> str:
         user = MEMBERS[int(user_id)]
-        raw, mentions, roles = self._mentions(text)
+        raw, mentions, roles = self._mentions(text, mentioned)
         mid = self._add(author=user.id, text=raw, reply_to=reply_to)
         if tag:
             self._msg(mid)["tag"] = tag
-        reply_bot = reply_to if reply_to and self._msg(reply_to) and self._msg(reply_to)["author"] == BOT_ID else None
-        actions = self.core.handle(Incoming(user, raw, CHANNEL, mid, mentions, roles, reply_bot), self.now)
+        mentioned = f"<@{BOT_ID}>" in raw
+        reply_bot = reply_to if mentioned and reply_to and self._msg(reply_to) \
+            and self._msg(reply_to)["author"] == BOT_ID else None
+        actions = self.core.handle(Incoming(user, raw, CHANNEL, mid, mentions, roles, reply_bot, mentioned), self.now)
         self._msg(mid)["intent"] = intent_summary(self.core.last_intent, TZ)
         self._run(actions)
         return self.state()
@@ -66,6 +69,7 @@ class Sim:
             if res.append:
                 msg["text"] += "\n" + res.append
             msg["buttons"] = []
+        self._run(res.actions)
         return self.state()
 
     def advance(self, seconds: int) -> str:
@@ -109,6 +113,20 @@ class Sim:
         self.__init__(start_ms)
         return self.state()
 
+    def note_update(self, note_id: int, category: str, text: str) -> str:
+        if text.strip():
+            self.store.update_note(int(note_id), category=category.strip(), text=text.strip())
+        return self.state()
+
+    def note_delete(self, note_id: int) -> str:
+        self.store.delete_note(int(note_id))
+        return self.state()
+
+    def note_add(self, category: str, text: str) -> str:
+        if text.strip():
+            self.store.add_note(1, category.strip(), text.strip(), self.now.timestamp())
+        return self.state()
+
     def clear(self) -> str:
         now = self.now
         self.__init__(now.timestamp() * 1000)
@@ -127,15 +145,18 @@ class Sim:
                 "creator": MEMBERS.get(r["creator_id"], User(0, "?")).name,
                 "targets": [target_name(t) for t in r["targets"]], "nags": r["nag_count"],
             } for r in rems],
-            "notes": [{"id": n["id"], "category": n["category"], "text": n["text"],
+            "notes": [{"id": n["id"], "category": n["category"], "text": n["text"], "mentions": n.get("mentions") or 1,
+                       "ago": self.core._ago(n, self.now), "credit": round(float(n.get("credit") or 0), 2),
                        "user": MEMBERS.get(n["user_id"], User(0, "?")).name} for n in self.store.all_notes()],
+            "lists": [n for n, _ in wish_lists(self.store.settings())] +
+                     [n for n, _ in note_categories(self.store.settings())],
             "settings": self.store.settings(),
             "next_event": (lambda t: timeparse.fmt_dt(t, TZ) if t else None)(self.core.next_event_at(self.now)),
             "note": note,
         }, ensure_ascii=False)
 
     # ---------- 內部 ----------
-    def _mentions(self, text: str):
+    def _mentions(self, text: str, mentioned: bool = True):
         """把「@小明」「@樂團」換成 Discord 的 <@id>／<@&id>，就像真的在 Discord 選了成員。"""
         mentions, roles = [], []
 
@@ -154,8 +175,8 @@ class Sim:
             return m.group(0)
         names = sorted([u.name for u in MEMBERS.values()] + list(ROLES.values()) + ["jvs"], key=len, reverse=True)
         raw = re.sub("@(" + "|".join(map(re.escape, names)) + ")", sub, text, flags=re.I)
-        if f"<@{BOT_ID}>" not in raw:
-            raw = f"<@{BOT_ID}> {raw}"          # 測試網頁裡每句都當作有 @jvs
+        if mentioned and f"<@{BOT_ID}>" not in raw:
+            raw = f"<@{BOT_ID}> {raw}"          # 預設每句都當作有 @jvs；關掉「@jvs」就是一般聊天
         return raw, mentions, roles
 
     def _add(self, author: int, text: str, reply_to=None, buttons=None, ping=False, ephemeral_for=None) -> int:
@@ -188,9 +209,13 @@ class Sim:
                         m["buttons"] = []
             elif isinstance(a, NeedWeather):
                 s = self.store.settings()
-                text = weather.format_report(a.county, fake_periods(self.now), s["weather_rain_threshold"], self.now)
-                text += "\n-# （測試網頁用的假資料，上線後才會接中央氣象署）"
-                self._add(BOT_ID, text, reply_to=a.reply_to)
+                periods = fake_periods(self.now)
+                if a.post:
+                    text = weather.format_report(a.county, periods, s["weather_rain_threshold"], self.now)
+                    text += "\n-# （測試網頁用的假資料，上線後才會接中央氣象署）"
+                    self._add(BOT_ID, text, reply_to=a.reply_to)
+                if a.rain_check:
+                    self._run(self.core.rain_check(periods, self.now))
 
 
 def target_name(t: str) -> str:
@@ -203,24 +228,43 @@ def target_name(t: str) -> str:
 def intent_summary(it, tz) -> dict | None:
     if it is None:
         return None
-    names = {"help": "說明", "reminder": "提醒", "timer": "計時", "note": "記住", "weather": "天氣",
-             "list": "查詢", "cancel": "取消提醒", "delete_note": "刪除記事", "snooze": "延後", "unknown": "聽不懂"}
+    names = {"help": "說明", "reminder": "提醒", "timer": "計時", "note": "記事", "wish": "記願望", "suggest": "從清單挑",
+             "weather": "天氣", "list": "查詢", "cancel": "取消提醒", "delete_note": "刪除記事",
+             "cancel_match": "用內容取消", "snooze": "延後", "payday_set": "設定發薪日", "unknown": "聽不懂"}
     parts = []
+    if it.ask:
+        parts.append({"event": f"要問時間（看事件：{it.event}）", "vague": f"要問時間（太模糊：{it.event}）",
+                      "none": "要問時間"}.get(it.ask, "要問時間"))
+    if it.rain:
+        parts.append("下雨天")
+    if it.payday:
+        parts.append("發薪日")
     if it.when:
         parts.append(timeparse.fmt_dt(it.when, tz))
-    if it.repeat:
+    if it.phrase:
+        parts.append(f"照你說的「{it.phrase}」")
+    if it.repeat and it.repeat != "payday":
         parts.append("🔁" + timeparse.describe_repeat(it.repeat))
-    if it.seconds:
-        parts.append(f"{it.seconds // 60} 分 {it.seconds % 60} 秒" if it.seconds % 60 else f"{it.seconds // 60} 分鐘")
-    if it.category:
-        parts.append(f"分類：{it.category}")
-    if it.scope:
+    if it.limit_label:
+        parts.append(it.limit_label)
+    if it.seconds and it.kind == "timer":
+        parts.append(f"{it.seconds // 60} 分鐘")
+    if it.wishes:
+        parts.append("、".join(f"{w.category}：{w.text}" for w in it.wishes))
+    if it.category and it.kind != "wish":
+        parts.append(f"清單：{it.category}")
+    if it.scope and it.kind == "list":
         parts.append({"reminders": "提醒", "notes": "記事", "all": "全部"}.get(it.scope, it.scope))
+    if it.kind == "cancel_match":
+        parts.append(("記事" if it.scope == "notes" else "提醒") + (f"・找「{it.keyword}」" if it.keyword else "")
+                     + ("・今天" if it.day == 0 else "・明天" if it.day == 1 else "") + ("・全部" if it.all else ""))
     if it.ids:
         parts.append("編號 " + "、".join(map(str, it.ids)))
+    if it.day and it.kind == "payday_set":
+        parts.append(f"{it.day} 號")
     if it.county:
         parts.append(it.county)
-    if it.text and it.kind != "snooze":
+    if it.text and it.kind not in ("snooze",):
         parts.append(f"內容「{it.text}」")
     if it.error:
         parts.append(f"⚠️ {it.error}")

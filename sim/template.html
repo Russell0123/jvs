@@ -125,6 +125,8 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
 .batch { width: 100%; min-height: 280px; border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 8px; font-size: 13px; }
 .divider { display: flex; align-items: center; gap: 10px; margin: 14px 0 4px; font-size: 13px; font-weight: 700; color: var(--accent); }
 .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.atjvs { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); flex: none; padding-bottom: 10px; }
+.item .inline select { flex: none; max-width: 6em; }
 .casetag { font-family: var(--font-mono); font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .report textarea { width: 100%; min-height: 160px; border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 8px; font-size: 13px; }
 .flagitem { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
@@ -163,7 +165,7 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
       <button data-view="chat" class="on">聊天</button>
       <button data-view="time">時間</button>
       <button data-view="rem">提醒</button>
-      <button data-view="notes">記事</button>
+      <button data-view="notes">清單</button>
       <button data-view="settings">設定</button>
       <button data-view="batch">批次</button>
       <button data-view="report">回報</button>
@@ -178,10 +180,11 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
         <div class="replybar" id="replybar" hidden><span id="replyText"></span><button type="button" id="replyCancel" aria-label="取消回覆">✕</button></div>
         <div class="row">
           <select id="who" aria-label="用誰的身分說話"></select>
+          <label class="atjvs" title="關掉就是一般聊天（沒 @ 助理）"><input type="checkbox" id="atjvs" checked> @jvs</label>
           <textarea id="input" rows="1" placeholder="跟 jvs 說…（不用打 @jvs）" aria-label="訊息"></textarea>
           <button class="primary" id="send" type="submit">送出</button>
         </div>
-        <div class="hint">在句子裡打 <code>@小明</code>、<code>@小美</code>、<code>@樂團</code> 就是提醒別人。按 jvs 訊息上的「回覆」可以回覆提醒（例如說「延後 30 分鐘」）。</div>
+        <div class="hint">關掉「@jvs」就是一般聊天：助理只會默默記下「你」說的「我想畫…／想買…／想看…」。在句子裡打 <code>@小明</code>、<code>@小美</code>、<code>@樂團</code> 就是提醒別人。按 jvs 訊息上的「回覆」可以回覆提醒（例如說「延後 30 分鐘」）。</div>
       </form>
     </section>
 
@@ -189,7 +192,7 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
       <div class="side-tabs" id="sideTabs">
         <button data-view="time" class="on">時間</button>
         <button data-view="rem">提醒</button>
-        <button data-view="notes">記事</button>
+        <button data-view="notes">清單</button>
         <button data-view="settings">設定</button>
         <button data-view="batch">批次</button>
         <button data-view="report">回報</button>
@@ -221,7 +224,9 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
       </div>
 
       <div class="pane" data-pane="notes" hidden>
-        <h3>所有記事</h3>
+        <h3>清單與記事</h3>
+        <p>聊天裡提到的「想畫／想看／想買…」會自動記在這裡；問「我最近可以畫什麼」會從這裡挑。可以直接改內容、換清單或刪除，跟正式後台一樣。</p>
+        <form class="inline" id="noteAdd"><select id="noteAddCat" aria-label="清單"></select><input id="noteAddText" placeholder="新增一項" aria-label="新增內容"><button class="ghost">新增</button></form>
         <div class="list" id="noteList"></div>
       </div>
 
@@ -235,7 +240,7 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
 
       <div class="pane" data-pane="batch" hidden>
         <h3>批次測試</h3>
-        <p>一行一句，會以「你」的身分依序送出。<code># 開頭</code>的行是分段標題；行首的編號（例如 <code>12.</code>）會變成句子旁的標籤。</p>
+        <p>一行一句，預設以「你」的身分依序送出。<code># 標題</code> 分段；行首編號（<code>12.</code>）變成標籤；<code>⏩ 30分鐘</code> 快轉時間；<code>~</code> 開頭是沒 @ 助理的一般聊天；<code>[小明]</code> 開頭換人說。</p>
         <div class="field">
           <label for="batchStart">起始時間（固定起點，結果才能跟 Claude 的回報對得上）</label>
           <input type="datetime-local" id="batchStart" value="2026-10-29T18:00">
@@ -357,17 +362,20 @@ function drawReminders() {
   $("#remList").innerHTML = rows.join("") || "<p>還沒有提醒。</p>";
 }
 function drawNotes() {
-  $("#noteList").innerHTML = state.notes.map(n => `<div class="item"><div><b>#${n.id}</b> ${esc(n.text)}</div>
-    <div class="meta"><span>${esc(n.category)}</span><span>${esc(n.user)}</span></div></div>`).join("") || "<p>還沒有記事。</p>";
+  const opts = cur => state.lists.map(c => `<option ${c === cur ? "selected" : ""}>${esc(c)}</option>`).join("");
+  $("#noteAddCat").innerHTML = opts($("#noteAddCat").value || state.lists[0]);
+  $("#noteList").innerHTML = state.notes.map(n => `<div class="item" data-note="${n.id}">
+    <div class="inline"><select aria-label="清單">${opts(n.category)}</select><input value="${esc(n.text)}" aria-label="內容">
+      <button class="ghost" data-note-save>存</button><button class="ghost" data-note-del>刪</button></div>
+    <div class="meta"><span>#${n.id}</span><span>${esc(n.user)}</span><span>${esc(n.ago)}</span>${n.mentions > 1 ? `<span>提過 ${n.mentions} 次</span>` : ""}<span>輪流分數 ${n.credit}</span></div></div>`).join("") || "<p>還沒有東西。</p>";
 }
-
 function drawSettings() {
   const s = state.settings, form = $("#settingsForm");
   form.innerHTML = info.groups.map(([title, keys]) => `<fieldset><legend>${esc(title)}</legend>${keys.map(k => {
     const v = s[k], d = info.defaults[k], label = esc(info.labels[k] || k), hint = info.hints[k] ? `<div class="hint">可用：${esc(info.hints[k])}</div>` : "";
     if (typeof d === "boolean") return `<label class="check"><input type="checkbox" id="set_${k}" name="${k}" ${v ? "checked" : ""}> ${label}</label>`;
     if (k === "weather_county") return `<div class="field"><label for="set_${k}">${label}</label><select id="set_${k}" name="${k}">${info.counties.map(c => `<option ${c === v ? "selected" : ""}>${c}</option>`).join("")}</select></div>`;
-    if (k === "note_categories") return `<div class="field"><label for="set_${k}">${label}</label><textarea id="set_${k}" name="${k}">${esc(String(v))}</textarea></div>`;
+    if (info.multiline.includes(k)) return `<div class="field"><label for="set_${k}">${label}</label><textarea id="set_${k}" name="${k}">${esc(String(v))}</textarea></div>`;
     const type = typeof d === "number" ? "number" : "text";
     return `<div class="field"><label for="set_${k}">${label}</label><input type="${type}" id="set_${k}" name="${k}" value="${esc(String(v))}">${hint}</div>`;
   }).join("")}</fieldset>`).join("");
@@ -404,13 +412,20 @@ function setView(v) {
 function wire() {
   $("#who").innerHTML = info.members.map(m => `<option value="${m.id}">${esc(m.name)}${m.roles.length ? "（樂團）" : ""}</option>`).join("");
   $("#who").addEventListener("change", e => { me = +e.target.value; drawLog(); });
+  $("#noteList").addEventListener("click", e => {
+    const row = e.target.closest("[data-note]"); if (!row) return;
+    const id = +row.dataset.note;
+    if (e.target.matches("[data-note-del]")) call("note_delete", id);
+    if (e.target.matches("[data-note-save]")) call("note_update", id, row.querySelector("select").value, row.querySelector("input").value);
+  });
+  $("#noteAdd").addEventListener("submit", e => { e.preventDefault(); call("note_add", $("#noteAddCat").value, $("#noteAddText").value); $("#noteAddText").value = ""; });
   $("#examples").innerHTML = EXAMPLES.map(t => `<button type="button">${esc(t)}</button>`).join("");
   $("#examples").addEventListener("click", e => { if (e.target.tagName === "BUTTON") { $("#input").value = e.target.textContent; $("#input").focus(); } });
   $("#composer").addEventListener("submit", e => {
     e.preventDefault();
     const text = $("#input").value.trim();
     if (!text) return;
-    call("say", me, text, replyTo);
+    call("say", me, text, replyTo, "", $("#atjvs").checked);
     $("#input").value = ""; replyTo = null; $("#replybar").hidden = true;
     const log = $("#log"); log.scrollTop = log.scrollHeight;
   });
@@ -466,8 +481,18 @@ function runBatch(text, startLocal) {
     const line = raw.trim();
     if (!line || /^#\s*=+\s*$/.test(line)) continue;
     if (line.startsWith("#")) { state = JSON.parse(sim.divider(line.replace(/^#+\s*/, ""))); continue; }
-    const m = line.match(/^(\d+)[.、)]\s*(.+)$/);
-    state = JSON.parse(sim.say(1, m ? m[2] : line, null, m ? "#" + m[1] : ""));
+    const ff = line.match(/^⏩\s*(\d+)\s*(分鐘|分|小時|天)?/);
+    if (ff) {
+      const sec = +ff[1] * ({ "小時": 3600, "天": 86400 }[ff[2]] || 60);
+      state = JSON.parse(sim.divider(`⏩ 快轉 ${ff[1]} ${ff[2] || "分鐘"}`));
+      state = JSON.parse(sim.advance(sec));
+      continue;
+    }
+    let rest = line, who = 1, tag = "", mentioned = true, mm;
+    if ((mm = rest.match(/^(\d+)[.、)]\s*(.+)$/))) { tag = "#" + mm[1]; rest = mm[2]; }
+    if ((mm = rest.match(/^\[(.+?)\]\s*(.+)$/))) { const u = info.members.find(x => x.name === mm[1]); if (u) who = u.id; rest = mm[2]; }
+    if (rest.startsWith("~")) { mentioned = false; rest = rest.slice(1).trim(); }
+    state = JSON.parse(sim.say(who, rest, null, tag, mentioned));
     n++;
   }
   draw();

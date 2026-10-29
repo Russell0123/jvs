@@ -79,7 +79,19 @@ class ParseResult:
     repeat: str | None = None           # daily / weekly:0,2 / monthly:5 / yearly:3-14 / interval:1800
     spans: list[tuple[int, int]] = field(default_factory=list)
     matched: bool = False               # 句子裡有沒有任何時間相關的字
+    dated: bool = False                 # 有沒有講到哪一天（沒有的話回覆要補「明天」之類的）
     error: str | None = None
+
+    def phrase(self, text: str) -> str:
+        """使用者講時間的原話（依出現順序接起來），回覆時照著講。"""
+        parts, last = [], -1
+        for a, b in sorted(self.spans):
+            if a < last:
+                a = last
+            if a < b:
+                parts.append(text[a:b].strip())
+            last = max(last, b)
+        return "".join(p for p in parts if p)
 
     def strip(self, text: str) -> str:
         """把用掉的時間片段從原句拿掉。"""
@@ -117,7 +129,7 @@ class _Scanner:
 
 
 def parse(text: str, now: datetime, period_times: dict[str, str] | None = None,
-          date_only_time: str = "09:00") -> ParseResult:
+          date_only_time: str = "09:00", few_days: int = 2) -> ParseResult:
     """解析句子裡的時間。now 必須帶時區（台灣時間）。"""
     pt = {**DEFAULT_PERIOD_TIMES, **(period_times or {})}
     sc = _Scanner(text)
@@ -152,13 +164,15 @@ def parse(text: str, now: datetime, period_times: dict[str, str] | None = None,
         repeat = "weekly:0,1,2,3,4"
     elif sc.take(r"每個?(週末|周末)"):
         repeat = "weekly:5,6"
-    elif m := sc.take(rf"每個?{WEEK}([{WD}](?:\s*[、,，和跟及與跟]?\s*[{WD}])*)"):
+    elif m := sc.take(rf"每個?{WEEK}([{WD}](?:\s*[、,，和跟及與還有]*\s*{WEEK}?\s*[{WD}])*)"):
         days = sorted({_wd_index(c) for c in m.group(1) if c in WD})
         repeat = "weekly:" + ",".join(map(str, days))
     elif sc.take(rf"每個?{WEEK}(?![{WD}])"):
         repeat = f"weekly:{today.weekday()}"
     elif m := sc.take(rf"每年\s*({NUM})\s*月\s*({NUM})\s*(號|日)?"):
         repeat = f"yearly:{cn2int(m.group(1))}-{cn2int(m.group(2))}"
+    elif sc.take(r"每個?月(的)?(月底|底)"):
+        repeat = "monthly:-3"
     elif m := sc.take(rf"每個?月\s*({NUM})\s*(號|日)"):
         repeat = f"monthly:{cn2int(m.group(1))}"
     elif sc.take(r"每個?月"):
@@ -192,11 +206,21 @@ def parse(text: str, now: datetime, period_times: dict[str, str] | None = None,
             day_offset = days
             month_offset = months
     elif sc.take(rf"下個?{WEEK}(?![{WD}末])"):
-        day_offset = 7
+        weekday = (1, 0)                       # 「下週」= 下週一
     elif sc.take(r"下個?月(?!\s*" + NUM + r"\s*(號|日))"):
         month_offset = 1
 
     # ---------- 日期 ----------
+    if sc.take(r"這幾天|這兩天|最近幾天|過幾天|近幾天|這陣子"):
+        day_offset = (day_offset or 0) + few_days
+    if m := sc.take(r"(下個?月|這個?月|本月)?\s*月底"):
+        months = 1 if (m.group(1) or "").startswith("下") else 0
+        first = _add_months(today.replace(day=1), months, 1)
+        last = calendar.monthrange(first.year, first.month)[1]
+        target_date = first.replace(day=last - 2)            # 月底 = 倒數第三天
+        if target_date < today:
+            first = _add_months(today.replace(day=1), 1, 1)
+            target_date = first.replace(day=calendar.monthrange(first.year, first.month)[1] - 2)
     words = {"大後天": 3, "後天": 2, "明天": 1, "明日": 1, "明早": 1, "明晚": 1,
              "今天": 0, "今日": 0, "今早": 0, "今晚": 0, "今夜": 0}
     if m := sc.take("|".join(words)):
@@ -214,7 +238,9 @@ def parse(text: str, now: datetime, period_times: dict[str, str] | None = None,
         shift = {"下下": 2, "下個": 1, "下": 1}.get(m.group(1) or "", 0)
         weekday = (shift, 5)
 
-    if m := sc.take(r"(\d{4})\s*[/\-.年]\s*(\d{1,2})\s*[/\-.月]\s*(\d{1,2})\s*(日|號)?"):
+    if target_date:
+        pass
+    elif m := sc.take(r"(\d{4})\s*[/\-.年]\s*(\d{1,2})\s*[/\-.月]\s*(\d{1,2})\s*(日|號)?"):
         target_date = _safe_date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
     elif m := sc.take(rf"(?<![\d:])(\d{{1,2}})\s*/\s*(\d{{1,2}})(?![\d/])|({NUM})\s*月\s*({NUM})\s*(日|號)?"):
         mo, d = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
@@ -247,9 +273,11 @@ def parse(text: str, now: datetime, period_times: dict[str, str] | None = None,
         elif m.group(5):
             minute = cn2int(m.group(5))
 
+    before = bool(sc.take(r"^\0*(之前|以前|前)") or sc.take(r"(?<=\0)(之前|以前|前)"))
+
     # 有任何時間片段被用到才算有時間
-    res = ParseResult(spans=sc.spans, repeat=repeat,
-                      matched=bool(sc.spans))
+    res = ParseResult(spans=sc.spans, repeat=repeat, matched=bool(sc.spans),
+                      dated=bool(target_date or weekday or day_offset is not None or month_offset or rel or repeat))
     if not res.matched:
         return res
     if hour is not None and not (0 <= hour <= 24 and 0 <= minute <= 59):
@@ -286,6 +314,9 @@ def parse(text: str, now: datetime, period_times: dict[str, str] | None = None,
     if hour == 24:
         hour, extra_day = 0, 1
     tod = time(hour, minute)
+    if before and explicit_clock:
+        # 「8點前提醒我」→ 提早半小時
+        tod = (datetime.combine(today, tod) - timedelta(minutes=30)).time()
 
     if repeat:
         res.when = next_occurrence(repeat, now, tod, tz)
@@ -395,7 +426,9 @@ def next_occurrence(rule: str, after: datetime, tod: time, tz) -> datetime:
     if kind == "monthly":
         n = int(arg)
         for i in range(0, 3):
-            day = _add_months(d.replace(day=1), i, n)
+            first = _add_months(d.replace(day=1), i, 1)
+            last = calendar.monthrange(first.year, first.month)[1]
+            day = first.replace(day=last + n + 1 if n < 0 else min(n, last))
             cand = datetime.combine(day, tod, tz)
             if cand > after:
                 return cand
@@ -423,7 +456,7 @@ def describe_repeat(rule: str | None) -> str:
             return "每個週末"
         return "每週" + "、".join("一二三四五六日"[x] for x in days)
     if kind == "monthly":
-        return f"每月 {arg} 號"
+        return "每月底" if arg.startswith("-") else f"每月 {arg} 號"
     if kind == "yearly":
         mo, d = arg.split("-")
         return f"每年 {mo}/{d}"

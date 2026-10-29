@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from aiohttp import web
 
 from . import timeparse
-from .settings import COUNTIES, DEFAULTS, GROUPS, HINTS, LABELS, validate
+from .settings import COUNTIES, DEFAULTS, GROUPS, HINTS, LABELS, MULTILINE_KEYS, note_categories, validate, wish_lists
 
 log = logging.getLogger(__name__)
 
@@ -36,14 +36,14 @@ button.small{padding:4px 10px;font-size:13px}button.danger{background:var(--dang
 .flash.err{background:color-mix(in srgb,var(--danger) 18%,transparent)}
 table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
 th{color:var(--muted);font-weight:500;white-space:nowrap}.wrap table{min-width:600px}td:first-child,td:nth-child(2){white-space:nowrap}.tag{font-size:12px;color:var(--muted)}.wrap{overflow-x:auto}
-.filters a{margin-right:12px;color:var(--muted)}.filters a.on{color:var(--accent);font-weight:600}
+.filters{display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:10px}.filters a{color:var(--muted)}.rowform{display:flex;gap:6px;align-items:center;margin:0 0 6px}.rowform input[type=text]{flex:1;min-width:8em}.rowform select{width:auto}.filters a.on{color:var(--accent);font-weight:600}
 """
 
 
 def page(title: str, active: str, body: str, flash: str = "", error: bool = False) -> web.Response:
     nav = "".join(f'<a href="{href}" class="{"on" if key == active else ""}">{name}</a>'
                   for key, href, name in [("settings", "/", "設定"), ("reminders", "/reminders", "提醒"),
-                                          ("notes", "/notes", "記事")])
+                                          ("notes", "/notes", "清單")])
     fl = f'<div class="flash{" err" if error else ""}">{flash}</div>' if flash else ""
     html = (f"<!doctype html><html lang='zh-Hant'><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width,initial-scale=1'><title>{escape(title)}</title>"
@@ -151,20 +151,60 @@ def make_app(bot) -> web.Application:
     async def notes_page(request: web.Request):
         notes = bot.store.all_notes()
         who = await names([n["user_id"] for n in notes])
+        s = bot.store.settings()
+        cats = [n for n, _ in wish_lists(s)] + [n for n, _ in note_categories(s)]
+        cats += sorted({n["category"] for n in notes} - set(cats))
+        f = request.query.get("c", "")
+        shown = [n for n in notes if not f or n["category"] == f]
+        shown.sort(key=lambda n: (cats.index(n["category"]) if n["category"] in cats else 99,
+                                  -(n.get("mentioned_at") or n["created_at"])))
+
+        def opts(cur):
+            return "".join(f"<option {'selected' if c == cur else ''}>{escape(c)}</option>" for c in cats)
         rows = "".join(
-            f"<tr><td>#{n['id']}</td><td>{escape(n['category'])}</td><td>{escape(n['text'])}</td>"
+            f"<tr><td>#{n['id']}</td><td colspan=2><form class='rowform' method='post' action='/notes/{n['id']}/edit'>"
+            f"<select name='category'>{opts(n['category'])}</select>"
+            f"<input type='text' name='text' value='{escape(n['text'], quote=True)}'>"
+            f"<button class='small'>儲存</button></form></td>"
             f"<td>{escape(who.get(n['user_id'], ''))}</td>"
-            f"<td>{datetime.fromtimestamp(n['created_at'], bot.tz):%m/%d %H:%M}</td>"
+            f"<td>{datetime.fromtimestamp(n.get('mentioned_at') or n['created_at'], bot.tz):%m/%d}"
+            f"{'・提過 ' + str(n['mentions']) + ' 次' if (n.get('mentions') or 1) > 1 else ''}</td>"
             f"<td><form method='post' action='/notes/{n['id']}/delete'><button class='small danger'>刪除</button></form></td></tr>"
-            for n in notes)
-        body = (f"<section><h2>記事</h2><div class='wrap'><table><tr><th>#</th><th>分類</th><th>內容</th>"
-                f"<th>誰的</th><th>時間</th><th></th></tr>{rows or '<tr><td colspan=6>沒有資料</td></tr>'}"
+            for n in shown)
+        filt = f'<a href="?" class="{"" if f else "on"}">全部</a>' + "".join(
+            f'<a href="?c={escape(c)}" class="{"on" if c == f else ""}">{escape(c)}</a>' for c in cats)
+        owners = sorted({n["user_id"] for n in notes} | ({bot.config.owner_id} if bot.config.owner_id else set()))
+        add = (f"<form class='rowform' method='post' action='/notes/add'>"
+               f"<select name='user_id'>{''.join(f'<option value={u}>{escape(who.get(u, str(u)))}</option>' for u in owners)}</select>"
+               f"<select name='category'>{opts(f or (cats[0] if cats else ''))}</select>"
+               f"<input type='text' name='text' placeholder='新增一項，例如：穿西裝的柴犬' required>"
+               f"<button class='small'>新增</button></form>") if owners else ""
+        body = (f"<section><h2>清單與記事</h2><p class='tag'>「想畫／想看／想買…」是聊天裡自動記下來的願望；"
+                f"問 bot「我最近可以畫什麼」會從這裡挑。可以直接改內容、換清單或刪除。</p>"
+                f"<div class='filters'>{filt}</div>{add}<div class='wrap'><table><tr><th>#</th><th colspan=2>清單／內容</th>"
+                f"<th>誰的</th><th>最後提到</th><th></th></tr>{rows or '<tr><td colspan=6>沒有資料</td></tr>'}"
                 f"</table></div></section>")
-        return page("記事", "notes", body)
+        return page("清單", "notes", body)
+
+    async def note_edit(request: web.Request):
+        form = await request.post()
+        text = str(form.get("text", "")).strip()
+        if text:
+            bot.store.update_note(int(request.match_info["id"]), text=text,
+                                  category=str(form.get("category", "")).strip() or "備忘")
+        raise web.HTTPSeeOther(request.headers.get("Referer") or "/notes")
+
+    async def note_add(request: web.Request):
+        form = await request.post()
+        text = str(form.get("text", "")).strip()
+        if text and str(form.get("user_id", "")).isdigit():
+            bot.store.add_note(int(form["user_id"]), str(form.get("category", "備忘")), text,
+                               datetime.now(bot.tz).timestamp())
+        raise web.HTTPSeeOther(request.headers.get("Referer") or "/notes")
 
     async def note_delete(request: web.Request):
         bot.store.delete_note(int(request.match_info["id"]))
-        raise web.HTTPSeeOther("/notes")
+        raise web.HTTPSeeOther(request.headers.get("Referer") or "/notes")
 
     async def health(request: web.Request):
         return web.json_response({"ok": True, "discord_ready": bot.is_ready()})
@@ -175,6 +215,7 @@ def make_app(bot) -> web.Application:
         web.post("/weather/test", weather_test),
         web.get("/reminders", reminders_page), web.post(r"/reminders/{id:\d+}/cancel", reminder_cancel),
         web.get("/notes", notes_page), web.post(r"/notes/{id:\d+}/delete", note_delete),
+        web.post(r"/notes/{id:\d+}/edit", note_edit), web.post("/notes/add", note_add),
         web.get("/healthz", health),
     ])
     return app
@@ -193,7 +234,7 @@ def render_settings(s: dict) -> str:
             if k == "weather_county":
                 opts = "".join(f"<option {'selected' if c == v else ''}>{c}</option>" for c in COUNTIES)
                 out.append(f"<select id='{k}' name='{k}'>{opts}</select>")
-            elif k == "note_categories":
+            elif k in MULTILINE_KEYS:
                 out.append(f"<textarea id='{k}' name='{k}'>{escape(str(v))}</textarea>")
             elif isinstance(DEFAULTS[k], int):
                 out.append(f"<input type='number' id='{k}' name='{k}' value='{v}'>")

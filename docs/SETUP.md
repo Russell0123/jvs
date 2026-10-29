@@ -14,14 +14,17 @@
 
 1. 到 <https://discord.com/developers/applications> → **New Application**，名字取 `jvs`（或你喜歡的）
 2. 左邊 **Bot** → **Reset Token** → 複製下來，這就是 `DISCORD_TOKEN`（**不要給任何人看**）
-3. 同一頁的 **Privileged Gateway Intents** 三個都**不用開**（bot 只看 @它的訊息，Discord 本來就會給內容）
+3. 同一頁的 **Privileged Gateway Intents**：打開 **Message Content Intent**（其他兩個不用開）
+   - 這是為了讓你「沒 @ bot、只是在聊天裡說『我想畫…』」時也能被記下來
+   - 不開也能用，只是只有 @bot 的訊息會被處理
 4. 左邊 **OAuth2 → URL Generator**：
    - Scopes 勾 `bot`
    - Bot Permissions 勾 `View Channels`、`Send Messages`、`Read Message History`
    - 想讓它 @ 一般不能被 @ 的身分組，再勾 `Mention Everyone`（可不勾）
    - 複製最下面的網址，在瀏覽器開啟，把 bot 邀進你的伺服器
-5. 拿頻道 ID：Discord 設定 → 進階 → 打開**開發者模式** → 在頻道名稱上按右鍵 → **複製頻道 ID**，這就是 `CHANNEL_IDS`
-6. 如果頻道是私人的，記得在頻道權限裡讓 bot 看得到
+5. 拿你的使用者 ID（填 `OWNER_ID`）：開發者模式下在自己的頭像上按右鍵 → **複製使用者 ID**。預設只有你的「我想畫…」會被自動記錄
+6. 拿頻道 ID：Discord 設定 → 進階 → 打開**開發者模式** → 在頻道名稱上按右鍵 → **複製頻道 ID**，這就是 `CHANNEL_IDS`
+7. 如果頻道是私人的，記得在頻道權限裡讓 bot 看得到
 
 ## 2. 中央氣象署 API key
 
@@ -56,7 +59,7 @@ repo 是 private 的，在 VM 上 clone 需要驗證。最簡單的方法是到 
 git clone https://github.com/Russell0123/jvs.git
 cd jvs
 sudo bash deploy/install.sh
-sudo nano /opt/jvs/.env      # 填 DISCORD_TOKEN、CHANNEL_IDS、CWA_API_KEY
+sudo nano /opt/jvs/.env      # 填 DISCORD_TOKEN、CHANNEL_IDS、OWNER_ID、CWA_API_KEY
 sudo systemctl enable --now jvs
 journalctl -u jvs -f         # 看到「已登入：jvs#xxxx」就成功了，Ctrl+C 離開
 ```

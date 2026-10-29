@@ -52,12 +52,14 @@ def to_user(member: discord.abc.User) -> User:
 
 class ReminderBot(discord.Client):
     def __init__(self, config: Config):
-        intents = discord.Intents.default()   # @bot 的訊息不需要 Message Content 權限也拿得到內容
+        intents = discord.Intents.default()
+        # 沒 @ bot 的訊息也要讀（記錄「我想畫…」），需要在 Developer Portal 打開 Message Content Intent
+        intents.message_content = True
         super().__init__(intents=intents, allowed_mentions=NO_PINGS)
         self.config = config
         self.tz = config.tz
         self.store = SqliteStore(config.db_path)
-        self.core = Assistant(self.store, self.tz)
+        self.core = Assistant(self.store, self.tz, owner_id=config.owner_id)
         self.web_runner = None
 
     def now(self) -> datetime:
@@ -83,15 +85,16 @@ class ReminderBot(discord.Client):
     async def on_message(self, message: discord.Message):
         if message.author.bot or message.channel.id not in self.config.channel_ids:
             return
-        # 沒開 Message Content 權限時，只有 @到 bot 的訊息才拿得到內容，所以一定要 @
-        if self.user not in message.mentions and not any(self._is_my_role(r) for r in message.role_mentions):
-            return
+        mentioned = self.user in message.mentions or any(self._is_my_role(r) for r in message.role_mentions)
+        if not mentioned and not message.content:
+            return      # 沒開 Message Content Intent 時拿不到內容
         incoming = Incoming(
             author=to_user(message.author), text=message.content, channel_id=message.channel.id,
             message_id=message.id,
             mention_user_ids=[u.id for u in message.mentions if u.id != self.user.id and not u.bot],
             mention_role_ids=[r.id for r in message.role_mentions if not self._is_my_role(r)],
-            reply_to_bot_message_id=await self._replied_bot_message_id(message))
+            reply_to_bot_message_id=await self._replied_bot_message_id(message) if mentioned else None,
+            mentioned=mentioned)
         try:
             await self.run_actions(self.core.handle(incoming, self.now()), source=message)
         except Exception:
@@ -152,6 +155,10 @@ class ReminderBot(discord.Client):
         try:
             periods = await weather.fetch(self.config.cwa_api_key, a.county, self.tz)
             text = weather.format_report(a.county, periods, s["weather_rain_threshold"], self.now())
+            if a.rain_check:
+                await self.run_actions(self.core.rain_check(periods, self.now()))
+            if not a.post:
+                return
         except weather.WeatherError as e:
             if raise_errors:
                 raise
@@ -178,6 +185,8 @@ class ReminderBot(discord.Client):
         if res.append:
             content = f"{content}\n{res.append}"
         await interaction.response.edit_message(content=content, view=None)
+        if res.actions:
+            await self.run_actions(res.actions)
 
     # ---------- 排程 ----------
     @tasks.loop(seconds=15)
