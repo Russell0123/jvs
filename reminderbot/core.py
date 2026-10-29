@@ -17,7 +17,7 @@ from datetime import datetime, time, timedelta
 from . import timeparse, weather
 from .router import REMINDER_RE, Intent, clean_reminder_text, extract_wishes, fuzzy_match, route
 from . import rules
-from .settings import find_county, phrases, topics, wish_acks, wish_verb
+from .settings import find_county, phrases, split_pool, topics, wish_acks, wish_verb
 
 HELP = """**我會做這些事**
 👋 **叫我**：@賈維斯，或句子裡提到賈維斯、Jarvis
@@ -71,6 +71,14 @@ class Button:
     url: str = ""                               # 有網址就是連結按鈕
 
 
+IMG_TOKEN = re.compile(r"\{圖[:：]\s*(\w+)\s*\}")    # 說法裡的 {圖:3}
+IMG_MARK = re.compile(r"\x00img:(\w+)\x00")           # pick() 換成這個記號，Send 建立時拿出來變成附圖
+
+
+def strip_marks(text: str) -> str:
+    return IMG_MARK.sub("", text).strip() if text and "\x00" in text else text
+
+
 @dataclass
 class Send:
     channel_id: int
@@ -81,7 +89,14 @@ class Send:
     reminder_id: int | None = None              # 送出後要記下 message_id（呼叫 core.sent）
     embed: dict | None = None                   # 卡片：title / description / fields / color / footer
     ephemeral: bool = False                     # 只有對方看得到（/ 指令）
-    image: str = ""                             # 附圖：圖庫裡的「分組/檔名」
+    image: str = ""                             # 附圖：圖庫裡的「分組/檔名」，或「#代碼」
+
+    def __post_init__(self):
+        if self.text and "\x00" in self.text:
+            codes = IMG_MARK.findall(self.text)
+            self.text = strip_marks(self.text)
+            if codes and not self.image:
+                self.image = "#" + codes[0]
 
 
 @dataclass
@@ -91,6 +106,9 @@ class Edit:
     append: str = ""                            # 在原訊息後面加一行
     strike: bool = False                        # 原訊息加刪除線
     clear_buttons: bool = True
+
+    def __post_init__(self):
+        self.append = strip_marks(self.append)
 
 
 @dataclass
@@ -126,6 +144,9 @@ class PressResult:
     ephemeral_buttons: list = field(default_factory=list)
     actions: list = field(default_factory=list)  # 按完還要做的事（例如送出確認訊息）
 
+    def __post_init__(self):
+        self.ephemeral, self.append = strip_marks(self.ephemeral), strip_marks(self.append)
+
 
 def mention_str(target: str) -> str:
     kind, _, tid = target.partition(":")
@@ -151,8 +172,8 @@ def fmt_seconds(s: int) -> str:
 def say(template: str, **values) -> str:
     """套用口吻句；內容是空的就把「：{text}」這類片段收乾淨。"""
     out = fill(template, **values)
-    out = re.sub(r"[：:]\s*([。！～!?？])", r"\1", out)
-    return re.sub(r"\s{2,}", " ", out).strip()
+    out = re.sub(r"[：:][ \t]*([。！～!?？])", r"\1", out)
+    return re.sub(r"[ \t\u3000]{2,}", " ", out).strip()
 
 
 class Assistant:
@@ -187,7 +208,9 @@ class Assistant:
         choice = rng.choice(fresh)
         keep = max(0, min(3, len(pool) - 1))
         self.store.set_meta(f"recent:{key}", (recent + [choice])[-keep:] if keep else [])
-        return say(choice, **values)
+        codes = IMG_TOKEN.findall(choice)
+        text = say(IMG_TOKEN.sub("", choice), **values)
+        return text + (f"\x00img:{rng.choice(codes)}\x00" if codes else "")
 
     def phrase(self, s: dict, key: str, rng, **values) -> str:
         return self.pick(key, phrases(s, key), rng, **values)
@@ -252,15 +275,13 @@ class Assistant:
 
     def _rule_reply(self, rule: dict, msg: Incoming, now: datetime, s: dict) -> list:
         rng = random.Random((msg.message_id or int(now.timestamp())) + rule["id"])
-        pool = [p for p in rule["replies"].splitlines() if p.strip()]
+        pool = split_pool(rule["replies"])
         text = self.fill_pool(f"rule:{rule['id']}", pool, rng, now, msg.author.name) if pool else ""
         imgs = self.images(f"r{rule['id']}")
-        image = f"r{rule['id']}/{rng.choice(imgs)}" if imgs else ""
-        if not text and not image:
-            return []
         out = self._reply(msg, text)
-        out[0].image = image
-        return out
+        if not out[0].image and imgs:
+            out[0].image = f"r{rule['id']}/{rng.choice(imgs)}"
+        return out if out[0].text or out[0].image else []
 
     def _handle(self, msg: Incoming, now: datetime, s: dict) -> list:
         text = re.sub(r"<@[!&]?\d+>", " ", msg.text).strip()
@@ -317,7 +338,7 @@ class Assistant:
             self.last_intent = Intent("greet")
             text, image = self.greet(s, rng, now, msg.author.name)
             out = self._reply(msg, text)
-            out[0].image = image
+            out[0].image = out[0].image or image
             return out
         if owner and msg.mentioned:
             return self._dispatch(msg, it, s, now, rng)
@@ -328,7 +349,7 @@ class Assistant:
         rare = rng.random() * 100 < float(s["greet_rare_percent"])
         key = "greet_rare_phrases" if rare else "greet_phrases"
         text = self.fill_pool(key, phrases(s, key), rng, now, name)
-        return text, self.pick_image("rare" if rare else "greet", s, rng)
+        return text, "" if IMG_MARK.search(text) else self.pick_image("rare" if rare else "greet", s, rng)
 
     def fill_pool(self, key: str, pool: list[str], rng, now: datetime | None, name: str) -> str:
         """挑一句，套上 {時段} {名字} {天氣}；還沒有天氣就先跳過講到天氣的句子。"""
@@ -355,6 +376,30 @@ class Assistant:
         allimg = self.store.get_meta("images") or {}
         allimg[group] = names
         self.store.set_meta("images", allimg)
+        codes = {c: r for c, r in self.image_codes().items() if not r.startswith(group + "/")
+                 or r.split("/", 1)[1] in names}
+        self.store.set_meta("imgcodes", codes)
+        for n in names:
+            self.image_code(f"{group}/{n}")
+
+    def image_codes(self) -> dict:
+        """代碼 → 「分組/檔名」。每張圖上傳時配一個數字代碼，說法裡寫 {圖:代碼} 就會附那張。"""
+        return self.store.get_meta("imgcodes") or {}
+
+    def image_code(self, ref: str) -> str:
+        codes = self.image_codes()
+        code = next((c for c, r in codes.items() if r == ref), None)
+        if code is None:
+            seq = int(self.store.get_meta("imgseq") or 0) + 1
+            code = str(seq)
+            codes[code] = ref
+            self.store.set_meta("imgcodes", codes)
+            self.store.set_meta("imgseq", seq)
+        return code
+
+    def resolve_image(self, image: str) -> str:
+        """Send.image →「分組/檔名」；「#代碼」查不到就回空字串。"""
+        return self.image_codes().get(image[1:], "") if image.startswith("#") else image
 
     def pick_image(self, group: str, s: dict, rng) -> str:
         imgs = self.images(group)

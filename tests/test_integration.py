@@ -265,7 +265,8 @@ async def test_web_auth_and_settings(tmp_path):
 
     async def post_weather_now():
         return None
-    bot = SimpleNamespace(config=cfg, tz=TZ, store=SqliteStore(str(tmp_path / "w.db")),
+    store = SqliteStore(str(tmp_path / "w.db"))
+    bot = SimpleNamespace(config=cfg, tz=TZ, store=store, core=Assistant(store, TZ),
                           get_user=lambda i: None, fetch_user=fetch_user, post_weather_now=post_weather_now)
     client = TestClient(TestServer(make_app(bot)))
     await client.start_server()
@@ -780,3 +781,23 @@ async def test_web_rules(tmp_path):
         assert rules.load(store)[-1]["id"] == 3                     # 刪掉的編號不重用
     finally:
         await client.close()
+
+
+def test_multiline_and_bound_images(core):
+    from reminderbot.settings import split_pool
+    assert split_pool('嘿\n"早安\n加油" {圖:3}\n"一行"\n"沒收尾\n下一行') == \
+        ["嘿", "早安\n加油 {圖:3}", "一行", '"沒收尾', "下一行"]
+    core.set_images("greet", ["a.png", "b.png"])
+    codes = core.image_codes()
+    assert sorted(codes.values()) == ["greet/a.png", "greet/b.png"]
+    code_b = core.image_code("greet/b.png")
+    core.store.save_settings({"greet_phrases": f'"{{時段}}\n今天也要加油" {{圖:{code_b}}}', "greet_rare_percent": 0})
+    [(_, r)] = Chat(core).say(MING, "賈維斯", mentioned=False)
+    assert r.text == "午安\n今天也要加油" and core.resolve_image(r.image) == "greet/b.png"
+    # 刪掉圖，代碼跟著失效；新圖拿新代碼，不會重用
+    core.set_images("greet", ["a.png"])
+    assert core.resolve_image("#" + code_b) == "" and core.image_code("greet/c.png") not in codes
+    # 規則的回覆也能綁圖、寫多行
+    add_rule(core, words="晚安", mode="replace", replies=f'"晚安\n好夢" {{圖:{core.image_code("greet/a.png")}}}')
+    [(_, r)] = Chat(core).say(MING, "賈維斯 晚安", mentioned=False)
+    assert r.text == "晚安\n好夢" and core.resolve_image(r.image) == "greet/a.png"

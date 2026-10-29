@@ -240,6 +240,7 @@ class Sim:
                      [n for n, _ in note_categories(self.store.settings())],
             "settings": self.store.settings(),
             "rules": [{**r, "summary": rules.summary(r)} for r in rules.load(self.store)],
+            "imgcodes": {ref: code for code, ref in self.core.image_codes().items()},
             "next_event": (lambda t: timeparse.fmt_dt(t, TZ) if t else None)(self.core.next_event_at(self.now)),
             "note": note,
             "fake_rain": self.fake_rain,
@@ -292,7 +293,7 @@ class Sim:
                 if a.embed:
                     self._msg(mid)["embed"] = a.embed
                 if a.image:
-                    self._msg(mid)["image"] = a.image
+                    self._msg(mid)["image"] = self.core.resolve_image(a.image)
                 if a.reminder_id:
                     self.core.sent(a.reminder_id, mid, a.channel_id)
             elif isinstance(a, Edit):

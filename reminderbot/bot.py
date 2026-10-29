@@ -233,7 +233,7 @@ class ReminderBot(discord.Client):
                 await interaction.followup.send(a.text, ephemeral=True)
                 continue
             file = discord.File(io.BytesIO(await upload.read()), filename=upload.filename) if upload else None
-            if file is None and (p := images.path_of(images.folder(self.config.db_path), a.image)):
+            if file is None and (p := images.path_of(images.folder(self.config.db_path), self.core.resolve_image(a.image))):
                 file = discord.File(p)
             kwargs = {"file": file} if file else {}
             await target.reply(a.text or None, mention_author=False, allowed_mentions=NO_PINGS, **kwargs)
@@ -331,7 +331,7 @@ class ReminderBot(discord.Client):
             kwargs["view"] = view
         if a.embed:
             kwargs["embed"] = make_embed(a.embed)
-        if a.image and (p := images.path_of(images.folder(self.config.db_path), a.image)):
+        if a.image and (p := images.path_of(images.folder(self.config.db_path), self.core.resolve_image(a.image))):
             kwargs["file"] = discord.File(p)
         text = a.text or None
         if source is not None and a.reply_to == source.id:

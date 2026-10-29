@@ -327,6 +327,34 @@ def validate(form: dict, keys=None) -> tuple[dict, list[str]]:
     return out, errors
 
 
+_CLOSE = re.compile(r'^(.*?)["”]((?:\s*\{圖[:：]\s*\w+\s*\})*)\s*$', re.S)
+
+
+def split_pool(raw: str) -> list[str]:
+    """一行一句；用 " " 包起來的可以跨好幾行（後面可以接 {圖:代碼}）。引號沒收尾就照一行一句。"""
+    out, buf = [], None
+    for line in str(raw).replace("\r\n", "\n").split("\n"):
+        if buf is None:
+            st = line.strip()
+            if st[:1] in ('"', "“"):
+                m = _CLOSE.match(st[1:])
+                if m and (m.group(1) or m.group(2)):
+                    out.append((m.group(1) + m.group(2)).strip())
+                    continue
+                buf = [st]
+            elif st:
+                out.append(st)
+            continue
+        m = _CLOSE.match(line)
+        if m:
+            out.append(("\n".join([buf[0][1:], *buf[1:], m.group(1)]) + m.group(2)).strip())
+            buf = None
+        else:
+            buf.append(line)
+    if buf is not None:
+        out += [x.strip() for x in buf if x.strip()]
+    return out
+
+
 def phrases(settings: dict, key: str) -> list[str]:
-    return [line.strip() for line in str(settings[key]).splitlines() if line.strip()] or \
-        [line for line in str(DEFAULTS[key]).splitlines() if line]
+    return split_pool(settings[key]) or split_pool(DEFAULTS[key])

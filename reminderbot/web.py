@@ -12,6 +12,7 @@ from aiohttp import web
 
 from . import images, rules, timeparse
 from .explain import describe, rules as logic_rules
+from .core import IMG_TOKEN
 from .router import route
 from .settings import (COUNTIES, DEFAULTS, GROUPS, LABELS, MULTILINE_KEYS, REPLY_GROUPS, REPLY_KEYS, SETTING_KEYS,
                        note_categories, validate, wish_lists)
@@ -41,6 +42,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 th{color:var(--muted);font-weight:500;white-space:nowrap}.wrap table{min-width:600px}td:first-child,td:nth-child(2){white-space:nowrap}.tag{font-size:12px;color:var(--muted)}.wrap{overflow-x:auto}
 .filters{display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:10px}.filters a{color:var(--muted)}.rowform{display:flex;gap:6px;align-items:center;margin:0 0 6px}.rowform input[type=text]{flex:1;min-width:8em}.rowform select{width:auto}.filters a.on{color:var(--accent);font-weight:600}
 .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px}.gallery figure{margin:0}
+.gallery .code{display:block;background:none;border:0;padding:0 0 4px;color:var(--muted);font:12px ui-monospace,monospace;cursor:pointer}.gallery .code[data-ok]{color:var(--accent)}
 .gallery img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:block;margin-bottom:4px}
 """
 
@@ -101,7 +103,14 @@ def make_app(bot) -> web.Application:
 
     def form_page(kind: str, flash: str = "", error: bool = False):
         title, groups, path = ("回覆", REPLY_GROUPS, "/replies") if kind == "replies" else ("設定", GROUPS, "/")
-        return page(title, kind, render_form(bot.store.settings(), groups, path, kind == "settings"), flash, error)
+        intro = REPLY_HELP if kind == "replies" else ""
+        return page(title, kind, intro + render_form(bot.store.settings(), groups, path, kind == "settings"),
+                    flash, error)
+
+    def missing_codes(values: dict) -> list[str]:
+        codes = bot.core.image_codes()
+        found = {c for v in values.values() if isinstance(v, str) for c in IMG_TOKEN.findall(v)}
+        return sorted(c for c in found if c not in codes)
 
     async def settings_page(request: web.Request):
         msg = {"saved": "✅ 已儲存", "weather": "✅ 已貼到頻道"}.get(request.query.get("ok", ""), "")
@@ -117,6 +126,9 @@ def make_app(bot) -> web.Application:
         bot.store.save_settings(values)
         if errors:
             return form_page(kind, "沒存到：" + escape("；".join(errors)), error=True)
+        if missing := missing_codes(values):
+            return form_page(kind, "已儲存，但圖片頁找不到這些代碼：" + escape("、".join(f"{{圖:{c}}}" for c in missing)),
+                             error=True)
         raise web.HTTPSeeOther(("/replies" if kind == "replies" else "/") + "?ok=saved")
 
     async def reset(request: web.Request, kind: str):
@@ -273,7 +285,8 @@ def make_app(bot) -> web.Application:
         if request.query.get("ok"):
             flash = f"✅ 上傳了 {escape(request.query['ok'])} 張"
         out = [f"<p class='tag'>打招呼時從對應的分組隨機挑一張附上，附圖機率 {escape(str(s['greet_image_percent']))}%"
-               "，在「設定 → 叫它」改。稀有招呼沒放圖就不附。</p>"]
+               "，在「設定 → 叫它」改。稀有招呼沒放圖就不附。<br>每張圖下面的代碼（例如 {圖:3}）按一下就複製，"
+               "貼到回覆或規則的句子後面，那句就一定配那張圖。</p>"]
         for g, gname in images.GROUPS.items():
             names = bot.core.images(g)
             empty = ("<p class='tag'>沒放圖時用這張預設的：</p><div class='gallery'><figure>"
@@ -286,6 +299,8 @@ def make_app(bot) -> web.Application:
         q = f"?back={back}" if back else ""
         tiles = "".join(
             f"<figure><img src='/images/{group}/{escape(n, quote=True)}' loading='lazy' alt=''>"
+            f"<button type='button' class='code' title='複製代碼' onclick=\"navigator.clipboard.writeText(this.textContent);"
+            f"this.dataset.ok=1\">{{圖:{bot.core.image_code(f'{group}/{n}')}}}</button>"
             f"<form method='post' action='/images/{group}/{escape(n, quote=True)}/delete{q}' "
             f"onsubmit=\"return confirm('刪掉這張？')\"><button class='ghost small'>刪除</button></form></figure>"
             for n in names)
@@ -352,7 +367,8 @@ def make_app(bot) -> web.Application:
             f"<input type='text' name='words' value='{val('words')}' placeholder='報告/作業'>"
             f"<label>但不包含</label><input type='text' name='not_words' value='{val('not_words')}' placeholder='交了'>"
             f"<label>符合的話</label>{sel('mode', rules.MODE)}"
-            f"<label>回覆：一行一句隨機挑，可用 {{時段}} {{名字}} {{天氣}}，可以不填只回圖</label>"
+            f"<label>回覆：一行一句隨機挑，多行的句子用 \" \" 包起來，句子後面加 {{圖:代碼}} 配指定的圖；"
+            f"可用 {{時段}} {{名字}} {{天氣}}，可以不填只回圖</label>"
             f"<textarea name='replies' rows='3'>{escape(r['replies'])}</textarea>"
             f"<label>冷卻：同一個頻道幾分鐘內只回一次，0＝不限</label>"
             f"<input type='number' name='cooldown' min='0' value='{r['cooldown']}'>")
@@ -396,12 +412,16 @@ def make_app(bot) -> web.Application:
         if errors:
             return await rules_page(request, "沒存到：" + escape("；".join(errors)), True,
                                     rule if any(r["id"] == rid for r in all_rules) else None)
+        missing = missing_codes({"replies": rule["replies"]})
         if any(r["id"] == rid for r in all_rules):
             all_rules = [rule if r["id"] == rid else r for r in all_rules]
         else:
             all_rules.append(rule)
             bot.store.set_meta("rule_seq", rid)
         rules.save(bot.store, all_rules)
+        if missing:
+            raise web.HTTPSeeOther("/rules?" + urlencode(
+                {"err": "已儲存，但圖片頁找不到這些代碼：" + "、".join(f"{{圖:{c}}}" for c in missing)}) + f"#r{rid}")
         raise web.HTTPSeeOther(f"/rules?ok=1#r{rid}")
 
     async def rule_delete(request: web.Request):
@@ -439,6 +459,10 @@ def make_app(bot) -> web.Application:
         web.get("/logic", logic_page), web.get("/healthz", health),
     ])
     return app
+
+
+REPLY_HELP = ("<p class='tag'>一行一句，隨機挑一句回。想回多行的話用 \" \" 把那句包起來，中間可以換行。"
+              "句子後面加 {圖:代碼} 就一定附那張圖，代碼在「圖片」或「規則」頁的圖下面。</p>")
 
 
 def render_form(s: dict, groups, path: str, tools: bool) -> str:

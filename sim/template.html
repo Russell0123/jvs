@@ -137,6 +137,7 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
 .sec-title { font-size: 13px; font-weight: 700; color: var(--accent); margin-top: 6px; }
 .thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .thumbs span { position: relative; }
+.imgcode { display: block; font-size: 11px; color: var(--muted); text-align: center; cursor: pointer; }
 .thumbs img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; display: block; }
 .thumbs button { position: absolute; top: -6px; right: -6px; border: 0; border-radius: 50%; width: 18px; height: 18px; padding: 0; font-size: 11px; line-height: 18px; background: var(--surface-2); color: var(--fg); }
 .att { display: block; max-width: min(240px, 100%); max-height: 240px; border-radius: 8px; margin-top: 4px; }
@@ -203,6 +204,7 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
         </div>
 
         <div class="pane" data-pane="replies" hidden>
+          <div class="tag">一行一句。多行的句子用 " " 包起來；句子後面加 {圖:代碼} 就一定附那張圖，代碼在最下面的圖片底下，按一下複製。</div>
           <form id="replyForm" class="list"></form>
           <div class="actions"><button class="primary" type="button" data-save="replies">套用</button><button class="ghost" type="button" data-reset="replies">恢復預設</button><span class="toast" id="repliesToast"></span></div>
           <div class="list" id="imgPane"></div>
@@ -462,6 +464,7 @@ function wire() {
     syncImages(); drawImages(); drawRules(); draw();
   });
   document.addEventListener("click", e => {
+    if (e.target.matches && e.target.matches(".imgcode")) { navigator.clipboard && navigator.clipboard.writeText(e.target.textContent).catch(() => {}); e.target.style.color = "var(--accent)"; return; }
     const g = e.target.dataset && e.target.dataset.imgDel; if (!g) return;
     IMG_NAMES[g] = IMG_NAMES[g].filter(x => x !== e.target.dataset.name);
     syncImages(); drawImages(); drawRules(); draw();
@@ -513,7 +516,7 @@ function attachment(ref) {
 }
 function syncImages() { for (const g of Object.keys(IMG_NAMES)) state = JSON.parse(sim.set_images(g, JSON.stringify(IMG_NAMES[g]))); }
 const thumbs = g => `<input type="file" accept="image/*" multiple data-img="${g}"><div class="thumbs">${(IMG_NAMES[g] || []).map(x =>
-  `<span><img src="${IMG_URLS[x]}" alt=""><button type="button" data-img-del="${g}" data-name="${esc(x)}" aria-label="刪除">×</button></span>`).join("")}</div>`;
+  `<span><img src="${IMG_URLS[x]}" alt=""><button type="button" data-img-del="${g}" data-name="${esc(x)}" aria-label="刪除">×</button><code class="imgcode" title="複製代碼">{圖:${esc((state.imgcodes || {})[g + "/" + x] || "?")}}</code></span>`).join("")}</div>`;
 function drawImages() {
   $("#imgPane").innerHTML = `<div class="sec-title">打招呼的圖片</div><div class="tag">打招呼時從分組隨機挑一張，機率在設定的「叫它」</div>` +
     IMG_GROUPS.map(([g, n]) => `<label>${n}</label>${thumbs(g)}`).join("");
