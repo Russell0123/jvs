@@ -12,7 +12,7 @@ from aiohttp import web
 
 from . import images, rules, timeparse
 from .explain import describe, rules as logic_rules
-from .core import IMG_TOKEN
+from .core import IMG_TOKEN, NO_IMAGE
 from .router import route
 from .settings import (COUNTIES, DEFAULTS, GROUPS, LABELS, MULTILINE_KEYS, REPLY_GROUPS, REPLY_KEYS, SETTING_KEYS,
                        note_categories, validate, wish_lists)
@@ -110,7 +110,7 @@ def make_app(bot) -> web.Application:
     def missing_codes(values: dict) -> list[str]:
         codes = bot.core.image_codes()
         found = {c for v in values.values() if isinstance(v, str) for c in IMG_TOKEN.findall(v)}
-        return sorted(c for c in found if c not in codes)
+        return sorted(c for c in found if c not in codes and c not in NO_IMAGE)
 
     async def settings_page(request: web.Request):
         msg = {"saved": "✅ 已儲存", "weather": "✅ 已貼到頻道"}.get(request.query.get("ok", ""), "")
@@ -367,7 +367,7 @@ def make_app(bot) -> web.Application:
             f"<input type='text' name='words' value='{val('words')}' placeholder='報告/作業'>"
             f"<label>但不包含</label><input type='text' name='not_words' value='{val('not_words')}' placeholder='交了'>"
             f"<label>符合的話</label>{sel('mode', rules.MODE)}"
-            f"<label>回覆：一行一句隨機挑，多行的句子用 \" \" 包起來，句子後面加 {{圖:代碼}} 配指定的圖；"
+            f"<label>回覆：一行一句隨機挑，多行的句子用 \" \" 包起來，句子後面加 {{圖:代碼}} 配指定的圖、{{圖:無}} 不附圖；"
             f"可用 {{時段}} {{名字}} {{天氣}}，可以不填只回圖</label>"
             f"<textarea name='replies' rows='3'>{escape(r['replies'])}</textarea>"
             f"<label>冷卻：同一個頻道幾分鐘內只回一次，0＝不限</label>"
@@ -462,7 +462,7 @@ def make_app(bot) -> web.Application:
 
 
 REPLY_HELP = ("<p class='tag'>一行一句，隨機挑一句回。想回多行的話用 \" \" 把那句包起來，中間可以換行。"
-              "句子後面加 {圖:代碼} 就一定附那張圖，代碼在「圖片」或「規則」頁的圖下面。</p>")
+              "句子後面加 {圖:代碼} 就一定附那張圖，代碼在「圖片」或「規則」頁的圖下面；加 {圖:無} 就這句不附圖。</p>")
 
 
 def render_form(s: dict, groups, path: str, tools: bool) -> str:

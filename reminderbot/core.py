@@ -71,7 +71,8 @@ class Button:
     url: str = ""                               # 有網址就是連結按鈕
 
 
-IMG_TOKEN = re.compile(r"\{圖[:：]\s*(\w+)\s*\}")    # 說法裡的 {圖:3}
+IMG_TOKEN = re.compile(r"\{圖[:：]\s*(\w*)\s*\}")    # 說法裡的 {圖:3}；{圖:無} = 這句不附圖
+NO_IMAGE = {"", "無", "none"}
 IMG_MARK = re.compile(r"\x00img:(\w+)\x00")           # pick() 換成這個記號，Send 建立時拿出來變成附圖
 
 
@@ -210,7 +211,8 @@ class Assistant:
         self.store.set_meta(f"recent:{key}", (recent + [choice])[-keep:] if keep else [])
         codes = IMG_TOKEN.findall(choice)
         text = say(IMG_TOKEN.sub("", choice), **values)
-        return text + (f"\x00img:{rng.choice(codes)}\x00" if codes else "")
+        code = rng.choice(codes) if codes else None
+        return text + (f"\x00img:{'無' if code in NO_IMAGE else code}\x00" if code is not None else "")
 
     def phrase(self, s: dict, key: str, rng, **values) -> str:
         return self.pick(key, phrases(s, key), rng, **values)

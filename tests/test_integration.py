@@ -801,3 +801,15 @@ def test_multiline_and_bound_images(core):
     add_rule(core, words="晚安", mode="replace", replies=f'"晚安\n好夢" {{圖:{core.image_code("greet/a.png")}}}')
     [(_, r)] = Chat(core).say(MING, "賈維斯 晚安", mentioned=False)
     assert r.text == "晚安\n好夢" and core.resolve_image(r.image) == "greet/a.png"
+
+
+def test_no_image_token(core):
+    core.set_images("greet", ["a.png"])
+    core.store.save_settings({"greet_phrases": "嘿 {圖:無}", "greet_rare_percent": 0})
+    for i in range(3):
+        [(_, r)] = Chat(core).say(MING, "賈維斯", now=T0 + timedelta(minutes=i), mentioned=False)
+        assert r.text == "嘿" and core.resolve_image(r.image) == ""
+    rule = add_rule(core, words="晚安", mode="replace", replies="晚安 {圖:}")
+    core.set_images(f"r{rule['id']}", ["x.png"])
+    [(_, r)] = Chat(core).say(MING, "賈維斯 晚安", mentioned=False)
+    assert r.text == "晚安" and core.resolve_image(r.image) == ""
