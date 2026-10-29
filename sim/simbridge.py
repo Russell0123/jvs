@@ -71,6 +71,8 @@ class Sim:
         user = MEMBERS[int(user_id)]
         msg = self._msg(int(message_id))
         res = self.core.press(custom_id, user, self.now, msg["channel"] if msg else CHANNEL)
+        if res.edit_menu:
+            return self.state(note="__edit__")      # 測試台：切到「提醒」分頁編輯
         if res.ephemeral:
             self._add(author=BOT_ID, text=res.ephemeral, ephemeral_for=user.id, channel=msg["channel"] if msg else CHANNEL)
         elif msg:
@@ -122,6 +124,14 @@ class Sim:
         finally:
             self._eph = None
         return self.state()
+
+    def rem_edit(self, user_id: int, rid: int, when_text: str, text: str) -> str:
+        ok, msg = self.core.edit_reminder(int(rid), MEMBERS[int(user_id)], self.now, when_text, text)
+        return self.state(note=msg)
+
+    def rem_cancel(self, user_id: int, rid: int) -> str:
+        self.core.press(f"rem:cancel:{int(rid)}", MEMBERS[int(user_id)], self.now)
+        return self.state(note="已取消")
 
     def set_rain(self, hour: int) -> str:
         """改假預報：今天幾點開始下雨（-1 = 不下雨）。下一次檢查（每 40 分鐘）就會發現變化。"""

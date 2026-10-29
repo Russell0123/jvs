@@ -51,6 +51,67 @@ def make_view(buttons: list[Button]) -> discord.ui.View | None:
     return view
 
 
+class EditMenu(discord.ui.View):
+    """只有本人看得到的編輯選單（不用存，10 分鐘後失效）。"""
+
+    def __init__(self, bot: "ReminderBot", rems: list[dict]):
+        super().__init__(timeout=600)
+        self.bot = bot
+        options = [discord.SelectOption(label=f"#{r['id']} {r['text'] or '提醒'}"[:100],
+                                        description=self.bot.core.when_label(r)[:100], value=str(r["id"]))
+                   for r in rems[:25]]
+        select = discord.ui.Select(placeholder="選一個提醒", options=options)
+        select.callback = self.chosen
+        self.select = select
+        self.add_item(select)
+
+    async def chosen(self, interaction: discord.Interaction):
+        rid = int(self.select.values[0])
+        rem = self.bot.store.get_reminder(rid)
+        line = f"`#{rid}` {self.bot.core.when_label(rem)}・{rem['text'] or '提醒'}"
+        await interaction.response.edit_message(content=line, view=EditActions(self.bot, rid))
+
+
+class EditActions(discord.ui.View):
+    def __init__(self, bot: "ReminderBot", rid: int):
+        super().__init__(timeout=600)
+        self.bot, self.rid = bot, rid
+
+    @discord.ui.button(label="改時間", style=discord.ButtonStyle.primary)
+    async def when(self, interaction: discord.Interaction, _):
+        await interaction.response.send_modal(EditModal(self.bot, self.rid, "when"))
+
+    @discord.ui.button(label="改內容")
+    async def text(self, interaction: discord.Interaction, _):
+        await interaction.response.send_modal(EditModal(self.bot, self.rid, "text"))
+
+    @discord.ui.button(label="取消提醒", style=discord.ButtonStyle.danger)
+    async def cancel(self, interaction: discord.Interaction, _):
+        res = self.bot.core.press(f"rem:cancel:{self.rid}", to_user(interaction.user), self.bot.now())
+        await interaction.response.edit_message(content=res.ephemeral or res.append.removeprefix("-# "), view=None)
+
+
+class EditModal(discord.ui.Modal):
+    def __init__(self, bot: "ReminderBot", rid: int, what: str):
+        super().__init__(title="改時間" if what == "when" else "改內容")
+        self.bot, self.rid, self.what = bot, rid, what
+        rem = bot.store.get_reminder(rid)
+        self.field = discord.ui.TextInput(
+            label="什麼時候？" if what == "when" else "提醒內容",
+            placeholder="明天下午3點、10分鐘後、每天早上8點" if what == "when" else "",
+            default=None if what == "when" else (rem["text"] if rem else ""), max_length=100)
+        self.add_item(self.field)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        value = str(self.field.value)
+        ok, msg = self.bot.core.edit_reminder(self.rid, to_user(interaction.user), self.bot.now(),
+                                              when_text=value if self.what == "when" else "",
+                                              new_text=value if self.what == "text" else "")
+        rem = self.bot.store.get_reminder(self.rid)
+        detail = f"\n`#{self.rid}` {self.bot.core.when_label(rem)}・{rem['text'] or '提醒'}" if ok and rem else ""
+        await interaction.response.send_message(msg + detail, ephemeral=True)
+
+
 def make_embed(card: dict) -> discord.Embed:
     e = discord.Embed(title=card.get("title"), description=card.get("description") or None,
                       color=card.get("color"))
@@ -118,6 +179,10 @@ class ReminderBot(discord.Client):
         @self.tree.command(name="設定", description="打開設定網頁")
         async def settings_cmd(interaction: discord.Interaction):
             await self._slash(interaction, "settings")
+
+        @self.tree.command(name="提醒", description="看和修改你的提醒")
+        async def reminders_cmd(interaction: discord.Interaction):
+            await self._slash(interaction, "reminders")
 
         @self.tree.command(name="天氣", description="看天氣（只有你看得到）")
         @app_commands.describe(地點="例如：台中、明天、台中明天（不填就看你所在地）")
@@ -277,8 +342,12 @@ class ReminderBot(discord.Client):
     # ---------- 按鈕 ----------
     async def on_press(self, interaction: discord.Interaction, custom_id: str):
         res = self.core.press(custom_id, to_user(interaction.user), self.now(), interaction.channel_id)
+        if res.edit_menu:
+            return await self.open_edit_menu(interaction)
         if res.ephemeral:
-            return await interaction.response.send_message(res.ephemeral, ephemeral=True)
+            view = make_view(res.ephemeral_buttons)
+            return await interaction.response.send_message(res.ephemeral, ephemeral=True,
+                                                           **({"view": view} if view else {}))
         content = interaction.message.content
         if res.strike:
             content = f"~~{content}~~"
@@ -287,6 +356,13 @@ class ReminderBot(discord.Client):
         await interaction.response.edit_message(content=content, view=None)
         if res.actions:
             await self.run_actions(res.actions)
+
+    # ---------- 編輯提醒：下拉選單 → 改時間／改內容／取消 ----------
+    async def open_edit_menu(self, interaction: discord.Interaction):
+        rems = self.core.editable(interaction.user.id)
+        if not rems:
+            return await interaction.response.send_message("目前沒有提醒。", ephemeral=True)
+        await interaction.response.send_message("選一個來改：", view=EditMenu(self, rems), ephemeral=True)
 
     # ---------- 排程 ----------
     @tasks.loop(seconds=15)

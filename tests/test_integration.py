@@ -587,3 +587,42 @@ def test_reply_reschedules_instead_of_new(core):
     chat.say(ME, "改成十分鐘後", reply_to=cid, now=T0 + timedelta(minutes=1))
     rems = core.store.user_reminders(7)
     assert len(rems) == 1 and rems[0]["due_at"] == int((T0 + timedelta(minutes=11)).timestamp())
+
+
+def test_edit_reminder(core):
+    chat = Chat(core)
+    chat.say(ME, "明天下午4點提醒我交報告")
+    ok, msg = core.edit_reminder(1, ME, T0, when_text="後天早上9點", new_text="交期末報告")
+    rem = core.store.get_reminder(1)
+    assert ok and rem["text"] == "交期末報告" and datetime.fromtimestamp(rem["due_at"], TZ).day == 31
+    ok, _ = core.edit_reminder(1, ME, T0, when_text="每天晚上8點")
+    assert ok and core.store.get_reminder(1)["repeat"] == "daily"
+    assert core.edit_reminder(1, MING, T0, new_text="x")[0] is False            # 不是他的
+    assert core.edit_reminder(1, ME, T0, when_text="哈哈")[0] is False           # 看不懂的時間
+    [(_, lst)] = chat.say(ME, "我有哪些提醒")
+    assert lst.buttons[0].label == "✏️ 編輯"
+    assert core.press(lst.buttons[0].custom_id, ME, T0).edit_menu
+
+
+async def test_web_edit_reminder(tmp_path):
+    cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path="", tz=TZ, web_host="127.0.0.1",
+                 web_port=0, admin_email="", web_password="", owner_id=7, reminder_channel_id=1)
+    store = SqliteStore(str(tmp_path / "e.db"))
+    core = Assistant(store, TZ, owner_id=7)
+
+    async def fetch_user(i):
+        raise LookupError
+    bot = SimpleNamespace(config=cfg, tz=TZ, store=store, core=core, get_user=lambda i: None, fetch_user=fetch_user)
+    rid = store.add_reminder(channel_id=1, creator_id=7, targets=["u:7"], text="交報告",
+                             due_at=int(datetime.now(TZ).timestamp()) + 3600, now=int(datetime.now(TZ).timestamp()))
+    client = TestClient(TestServer(make_app(bot)))
+    await client.start_server()
+    try:
+        assert "name='when'" in await (await client.get("/reminders")).text()
+        r = await client.post(f"/reminders/{rid}/edit", data={"when": "10分鐘後", "text": "交期末報告"},
+                              allow_redirects=False)
+        assert r.status == 303 and "m=ok" in r.headers["Location"] and store.get_reminder(rid)["text"] == "交期末報告"
+        r = await client.post(f"/reminders/{rid}/edit", data={"when": "哈哈", "text": ""}, allow_redirects=False)
+        assert "e=" in r.headers["Location"]
+    finally:
+        await client.close()

@@ -147,24 +147,41 @@ def make_app(bot) -> web.Application:
         who = await names([r["creator_id"] for r in rems] +
                           [int(t[2:]) for r in rems for t in r["targets"] if t.startswith("u:")])
         rows = []
+        flash = {"ok": "✅ 改好了"}.get(request.query.get("m", ""), escape(request.query.get("e", "")))
         for r in rems:
-            when = timeparse.fmt_dt(datetime.fromtimestamp(r["due_at"], bot.tz), bot.tz)
+            when = "下雨天" if r["kind"] == "rain" else timeparse.fmt_dt(datetime.fromtimestamp(r["due_at"], bot.tz), bot.tz)
             targets = "、".join(who.get(int(t[2:]), t) if t.startswith("u:") else f"身分組 {t[2:]}"
                                for t in r["targets"])
             rep = timeparse.describe_repeat(r["repeat"])
             kind = "⏱️ 計時" if r["kind"] == "timer" else ("🔁 " + rep if rep else "提醒")
-            action = (f"<form method='post' action='/reminders/{r['id']}/cancel'>"
-                      f"<button class='small danger'>取消</button></form>"
-                      if r["status"] in ("pending", "fired") else "")
-            rows.append(f"<tr><td>#{r['id']}</td><td>{when}</td><td>{escape(r['text'])}"
+            active = r["status"] in ("pending", "fired")
+            if active:
+                cell_when = (f"<input form='e{r['id']}' type='text' name='when' placeholder='{escape(when, quote=True)}'"
+                             f" title='例如：明天下午3點、10分鐘後、每天早上8點'>")
+                cell_text = f"<input form='e{r['id']}' type='text' name='text' value='{escape(r['text'], quote=True)}'>"
+                action = (f"<form id='e{r['id']}' method='post' action='/reminders/{r['id']}/edit' style='display:inline'>"
+                          f"<button class='small'>存</button></form> "
+                          f"<form method='post' action='/reminders/{r['id']}/cancel' style='display:inline'>"
+                          f"<button class='small danger'>取消</button></form>")
+            else:
+                cell_when, cell_text, action = when, escape(r["text"]), ""
+            rows.append(f"<tr><td>#{r['id']}</td><td>{cell_when}</td><td>{cell_text}"
                         f"<div class='tag'>{kind}</div></td><td>{escape(who.get(r['creator_id'], ''))}</td>"
-                        f"<td>{escape(targets)}</td><td>{STATUS.get(r['status'], r['status'])}</td><td>{action}</td></tr>")
+                        f"<td>{escape(targets)}</td><td>{STATUS.get(r['status'], r['status'])}</td>"
+                        f"<td style='white-space:nowrap'>{action}</td></tr>")
         filt = "".join(f'<a href="?f={k}" class="{"on" if k == f else ""}">{n}</a>'
                        for k, n in [("active", "進行中"), ("done", "已結束"), ("all", "全部")])
         body = (f"<section><h2>提醒</h2><div class='filters'>{filt}</div><div class='wrap'><table>"
                 f"<tr><th>#</th><th>時間</th><th>內容</th><th>建立者</th><th>提醒誰</th><th>狀態</th><th></th></tr>"
                 f"{''.join(rows) or '<tr><td colspan=7>沒有資料</td></tr>'}</table></div></section>")
-        return page("提醒", "reminders", body)
+        return page("提醒", "reminders", body, flash, error=bool(request.query.get("e")))
+
+    async def reminder_edit(request: web.Request):
+        form = await request.post()
+        ok, msg = bot.core.edit_reminder(int(request.match_info["id"]), None, datetime.now(bot.tz),
+                                         when_text=str(form.get("when", "")), new_text=str(form.get("text", "")))
+        from urllib.parse import quote
+        raise web.HTTPSeeOther("/reminders?m=ok" if ok else f"/reminders?e={quote(msg)}")
 
     async def reminder_cancel(request: web.Request):
         bot.store.update_reminder(int(request.match_info["id"]), status="cancelled")
@@ -253,6 +270,7 @@ def make_app(bot) -> web.Application:
         web.get("/replies", replies_page), web.post("/replies", save_replies), web.post("/replies/reset", reset_replies),
         web.post("/weather/test", weather_test),
         web.get("/reminders", reminders_page), web.post(r"/reminders/{id:\d+}/cancel", reminder_cancel),
+        web.post(r"/reminders/{id:\d+}/edit", reminder_edit),
         web.get("/notes", notes_page), web.post(r"/notes/{id:\d+}/delete", note_delete),
         web.post(r"/notes/{id:\d+}/edit", note_edit), web.post("/notes/add", note_add),
         web.get("/logic", logic_page), web.get("/healthz", health),

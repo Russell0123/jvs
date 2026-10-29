@@ -320,10 +320,18 @@ function card(e) {
 }
 
 function drawReminders() {
-  $("#remList").innerHTML = state.reminders.filter(r => !r.parent).map(r => `<div class="item">
-    <div><span class="status ${r.status}">${STATUS[r.status] || r.status}</span> ${esc(r.text || "提醒")}</div>
-    <div class="meta"><span>#${r.id}</span><span>${r.kind === "rain" ? "下雨天" : esc(r.when)}</span>${r.repeat ? `<span>🔁 ${esc(r.repeat)}</span>` : ""}<span>${esc(r.targets.join(" "))}</span></div></div>`).join("")
-    || `<div class="empty">沒有提醒</div>`;
+  const rows = state.reminders.filter(r => !r.parent);
+  $("#remList").innerHTML = (state.note && state.note !== "__edit__" && pane === "rem" ? `<div class="toast">${esc(state.note)}</div>` : "") +
+    (rows.map(r => {
+      const active = r.status === "pending" || r.status === "fired";
+      const when = r.kind === "rain" ? "下雨天" : r.when;
+      return `<div class="item" data-rem="${r.id}">
+        <div><span class="status ${r.status}">${STATUS[r.status] || r.status}</span> <b>#${r.id}</b> ${active ? "" : esc(r.text || "提醒")}</div>
+        ${active ? `<div class="inline"><input data-f="text" value="${esc(r.text)}" aria-label="內容"></div>
+        <div class="inline"><input data-f="when" placeholder="${esc(when)}" aria-label="改時間" title="例如：明天下午3點、10分鐘後、每天早上8點">
+          <button class="ghost" data-rem-save title="儲存">✓</button><button class="ghost" data-rem-del title="取消提醒">✕</button></div>` : ""}
+        <div class="meta"><span>${esc(when)}</span>${r.repeat ? `<span>🔁 ${esc(r.repeat)}</span>` : ""}<span>${esc(r.targets.join(" "))}</span></div></div>`;
+    }).join("") || `<div class="empty">沒有提醒</div>`);
 }
 
 function drawNotes() {
@@ -410,7 +418,7 @@ function wire() {
 
   $("#log").addEventListener("click", e => {
     const p = e.target.closest("[data-press]"), r = e.target.closest("[data-reply]"), f = e.target.closest("[data-flag]");
-    if (p) call("press", me, +p.dataset.mid, p.dataset.press);
+    if (p) { call("press", me, +p.dataset.mid, p.dataset.press); if (state.note === "__edit__") setView("rem"); }
     if (r) startReply(+r.dataset.reply);
     if (f) {
       const id = +f.dataset.flag, m = state.messages.find(x => x.id === id);
@@ -423,6 +431,11 @@ function wire() {
   for (const b of $$("[data-adv]")) b.addEventListener("click", () => call("advance", +b.dataset.adv));
   $("#jump").addEventListener("click", () => call("jump_next"));
 
+  $("#remList").addEventListener("click", e => {
+    const row = e.target.closest("[data-rem]"); if (!row) return;
+    if (e.target.matches("[data-rem-save]")) call("rem_edit", me, +row.dataset.rem, $("[data-f=when]", row).value, $("[data-f=text]", row).value);
+    if (e.target.matches("[data-rem-del]")) call("rem_cancel", me, +row.dataset.rem);
+  });
   $("#noteList").addEventListener("click", e => {
     const row = e.target.closest("[data-note]"); if (!row) return;
     if (e.target.matches("[data-note-del]")) call("note_delete", +row.dataset.note);

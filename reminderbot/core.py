@@ -120,6 +120,8 @@ class PressResult:
     append: str = ""
     strike: bool = False
     keep_buttons: bool = False
+    edit_menu: bool = False                     # 打開「選一個提醒來改」的選單（Discord 用下拉選單）
+    ephemeral_buttons: list = field(default_factory=list)
     actions: list = field(default_factory=list)  # 按完還要做的事（例如送出確認訊息）
 
 
@@ -294,6 +296,10 @@ class Assistant:
             if not settings_url:
                 return say_("設定網頁還沒開，主機上跑 deploy/public-web.sh。")
             return say_(self.phrase(s, "settings_link_phrases", rng), [Button("", "打開設定", url=settings_url)])
+        if name == "reminders":
+            if not self.editable(user.id):
+                return say_("目前沒有提醒。")
+            return [Send(channel_id, self.list_text(user.id, "reminders", None), [edit_button(user.id)], ephemeral=True)]
         if name == "weather":
             county = find_county(arg) if arg else None
             county, town = (county, "") if county else self.location(user.id, s)
@@ -395,7 +401,9 @@ class Assistant:
             return reply(self.suggest(msg.author.id, it.category, now, s, rng))
 
         if it.kind == "list":
-            return reply(self.list_text(msg.author.id, it.scope, it.category))
+            has_rems = it.scope in ("reminders", "all") and self.store.user_reminders(msg.author.id)
+            return reply(self.list_text(msg.author.id, it.scope, it.category),
+                         [edit_button(msg.author.id)] if has_rems else None)
 
         if it.kind == "cancel":
             ok = []
@@ -716,13 +724,15 @@ class Assistant:
 
     # ---------- 按鈕 ----------
     def press(self, custom_id: str, user: User, now: datetime, channel_id: int | None = None) -> PressResult:
-        m = re.fullmatch(r"rem:(done|snooze|cancel|pick|snz|undo|stop|view):(\d+)(?::([0-9a-z]+))?", custom_id)
+        m = re.fullmatch(r"rem:(done|snooze|cancel|pick|snz|undo|stop|view|editmenu):(\d+)(?::([0-9a-z]+))?", custom_id)
         if not m:
             return PressResult(ephemeral="這個按鈕失效了。")
         action, rid, arg = m.group(1), int(m.group(2)), m.group(3)
         s = self.store.settings()
         rng = random.Random(rid * 7919 + int(now.timestamp()))
 
+        if action == "editmenu":
+            return PressResult(edit_menu=True)
         if action == "undo":
             job = self.store.get_meta(f"undo:{rid}")
             if not job:
@@ -746,7 +756,7 @@ class Assistant:
             return PressResult(ephemeral="這不是你的提醒喔。")
 
         if action == "view":
-            return PressResult(ephemeral=self.view_text(rem, now, user.id))
+            return PressResult(ephemeral=self.view_text(rem, now, user.id), ephemeral_buttons=[edit_button(user.id)])
         if action == "pick":
             if rem["status"] != "draft":
                 return PressResult(ephemeral="已經設定好了。")
@@ -776,6 +786,46 @@ class Assistant:
         when = self._choice_dt(arg or str(s["btn_later_minutes"]), now, s)
         self.store.update_reminder(rid, status="pending", due_at=int(when.timestamp()), nag_count=0)
         return PressResult(append=f"-# 💤 {timeparse.fmt_dt(when, self.tz)}")
+
+    # ---------- 修改提醒 ----------
+    def _tp(self, s: dict) -> dict:
+        return dict(period_times={"morning": s["time_morning"], "noon": s["time_noon"],
+                                  "afternoon": s["time_afternoon"], "evening": s["time_evening"],
+                                  "night": s["time_night"]},
+                    date_only_time=s["date_only_time"], few_days=int(s["few_days"]))
+
+    def edit_reminder(self, rid: int, user: User | None, now: datetime, when_text: str = "",
+                      new_text: str = "") -> tuple[bool, str]:
+        """改時間（用講的：「明天下午3點」「10分鐘後」「每天早上8點」）或改內容。user=None 表示後台。"""
+        s = self.store.settings()
+        rem = self.store.get_reminder(rid)
+        if not rem or rem["status"] not in ("pending", "fired"):
+            return False, "這個提醒已經結束了。"
+        if user is not None and not can_touch(rem, user):
+            return False, "這不是你的提醒喔。"
+        fields = {}
+        if new_text.strip():
+            fields["text"] = new_text.strip()[:200]
+        if when_text.strip():
+            p = timeparse.parse(when_text.strip(), now, **self._tp(s))
+            if p.error or not p.when:
+                return False, p.error or "看不懂這個時間，例如：明天下午3點、10分鐘後、每天早上8點"
+            fields.update(due_at=int(p.when.timestamp()), status="pending", nag_count=0)
+            if p.repeat:
+                fields["repeat"] = p.repeat
+            if rem["kind"] == "rain":
+                fields["kind"] = "reminder"
+        if not fields:
+            return False, "沒有要改的東西。"
+        self.store.update_reminder(rid, **fields)
+        return True, self.phrase(s, "edit_phrases", random.Random(rid + int(now.timestamp())))
+
+    def editable(self, user_id: int) -> list[dict]:
+        """可以改的提醒（重複提醒只列本體，不列已經響過的那一次）。"""
+        return [r for r in self.store.user_reminders(user_id) if r["kind"] != "draft"]
+
+    def when_label(self, r: dict) -> str:
+        return self._when_label(r)
 
     # ---------- 時間到 ----------
     def _fire_text(self, rem: dict, s: dict, rng, nag: bool = False) -> str:
@@ -1164,6 +1214,10 @@ def fired_buttons(rid: int, s: dict, repeat: bool = False) -> list[Button]:
 
 def confirm_buttons(rid: int) -> list[Button]:
     return [Button(f"rem:view:{rid}", "查看"), Button(f"rem:cancel:{rid}", "取消")]
+
+
+def edit_button(user_id: int) -> Button:
+    return Button(f"rem:editmenu:{user_id}", "✏️ 編輯")
 
 
 def cancel_button(rid: int) -> Button:
