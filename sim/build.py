@@ -3,6 +3,7 @@
 把 reminderbot 的核心程式碼原封不動塞進網頁，瀏覽器用 Pyodide 執行，
 所以測試網頁的判斷邏輯和正式上線的 bot 完全一樣。
 """
+import base64
 import io
 import json
 import shutil
@@ -43,7 +44,12 @@ def main():
     (DIST / "pyodide").mkdir(parents=True)
     (DIST / "index.html").write_text(html, encoding="utf-8")
     for f in PYODIDE_FILES:
-        shutil.copy(CACHE / f, DIST / "pyodide" / f)
+        if f == "python_stdlib.zip":
+            # 網頁空間不能放 .zip，所以包成 .js（base64），網頁再攔截 Pyodide 的下載請求交給它
+            b64 = base64.b64encode((CACHE / f).read_bytes()).decode()
+            (DIST / "pyodide" / "python_stdlib.js").write_text(f'self.PY_STDLIB_B64="{b64}";')
+        else:
+            shutil.copy(CACHE / f, DIST / "pyodide" / f)
     total = sum(p.stat().st_size for p in DIST.rglob("*") if p.is_file())
     print(f"完成：{DIST}（共 {total / 1e6:.1f} MB）")
 

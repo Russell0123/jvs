@@ -249,6 +249,7 @@ legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
 </div>
 
 <script type="application/json" id="pysrc">/*__PYSRC__*/</script>
+<script src="pyodide/python_stdlib.js"></script>
 <script src="pyodide/pyodide.js"></script>
 <script>
 const $ = (s, el = document) => el.querySelector(s);
@@ -428,6 +429,18 @@ function wire() {
   $("#resetSettings").addEventListener("click", () => { call("reset_settings"); $("#settingsForm").dataset.ready = ""; drawSettings(); $("#settingsToast").textContent = state.note; });
   for (const b of $$("#tabs button, #sideTabs button")) b.addEventListener("click", () => setView(b.dataset.view));
 }
+
+// 標準函式庫包在 python_stdlib.js 裡；Pyodide 要下載 python_stdlib.zip 時直接給它
+const realFetch = window.fetch.bind(window);
+window.fetch = (input, init) => {
+  const url = typeof input === "string" ? input : (input && (input.url || input.href)) || String(input);
+  if (url && url.endsWith("python_stdlib.zip") && self.PY_STDLIB_B64) {
+    const bin = atob(self.PY_STDLIB_B64), bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return Promise.resolve(new Response(bytes, { headers: { "Content-Type": "application/zip" } }));
+  }
+  return realFetch(input, init);
+};
 
 async function boot() {
   try {
