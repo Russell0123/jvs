@@ -46,8 +46,9 @@ class Chat:
                 out.append((None, a))
         return out
 
-    def say(self, user, text, now=T0, mentions=(), roles=(), reply_to=None):
-        return self.run(self.core.handle(Incoming(user, text, CH, 1, list(mentions), list(roles), reply_to), now))
+    def say(self, user, text, now=T0, mentions=(), roles=(), reply_to=None, mentioned=True):
+        return self.run(self.core.handle(Incoming(user, text, CH, 1, list(mentions), list(roles), reply_to,
+                                                  mentioned), now))
 
     def tick(self, now):
         return self.run(self.core.tick(now, CH))
@@ -577,8 +578,14 @@ def test_slash_commands():
     assert isinstance(w, NeedWeather) and w.county == "臺中市" and w.mode == "tomorrow" and w.ephemeral
     [card] = core.weather_result(w, weather.demo_bundle(T0, "臺中市"), T0)
     assert card.ephemeral and card.embed
-    [no] = core.slash("help", MING, T0, 5)
-    assert no.ephemeral and no.text in core.store.settings()["unknown_phrases"].splitlines()
+    [other] = core.slash("help", MING, T0, 5)           # 誰都能用
+    assert other.ephemeral and other.text == h.text
+    [no] = core.slash("stark", MING, T0, 5)
+    assert no.ephemeral and "找不到" in no.text
+    pub, ack = core.slash("stark", MING, T0, 5, target_id=99)
+    assert pub.reply_to == 99 and not pub.ephemeral and pub.image == "builtin/stark.png" and ack.ephemeral
+    core.set_images("stark", ["s.png"])
+    assert core.slash("stark", MING, T0, 5, arg="笑死", target_id=99)[0].image == "stark/s.png"
 
 
 def test_reply_reschedules_instead_of_new(core):
@@ -687,5 +694,89 @@ async def test_web_images(tmp_path):
         assert (await client.get("/images/greet/..%2Fi.db")).status == 404
         r = await client.post(f"/images/greet/{names[0]}/delete", allow_redirects=False)
         assert core.images("greet") == names[1:] and not (tmp_path / "images" / "greet" / names[0]).exists()
+    finally:
+        await client.close()
+
+
+def add_rule(core, **kw):
+    from reminderbot import rules
+    rule, errors = rules.from_form({"on": "on", **kw}, len(rules.load(core.store)) + 1)
+    assert not errors, errors
+    rules.save(core.store, rules.load(core.store) + [rule])
+    return rule
+
+
+def test_rule_add_and_replace(core):
+    core.owner_id = 7
+    chat = Chat(core)
+    add_rule(core, name="吐槽", who="others", call="no", words="報告/作業", not_words="交了", replies="{名字}快去寫",
+             cooldown="10")
+    [(_, r)] = chat.say(MING, "我作業還沒寫", mentioned=False)
+    assert r.text == "小明快去寫" and core.last_intent.kind == "rule"
+    assert chat.say(MING, "報告好多", now=T0 + timedelta(minutes=5), mentioned=False) == []          # 冷卻中
+    assert chat.say(MING, "報告交了", now=T0 + timedelta(minutes=20), mentioned=False) == []         # 不含「交了」
+    assert chat.say(ME, "作業好多", mentioned=False) == []                                          # 只限我以外的人
+    # 「另外回」：原本的提醒照建
+    add_rule(core, name="加油", who="owner", task="yes", words="報告", replies="加油")
+    out = chat.say(ME, "賈維斯 明天下午3點提醒我交報告", mentioned=False)
+    assert len(core.store.user_reminders(7)) == 1 and out[-1][1].text == "加油"
+    # 「取代」：命中就不做原本的事
+    add_rule(core, name="不准", who="owner", task="yes", words="打電動", mode="replace", replies="不行")
+    [(_, r)] = chat.say(ME, "賈維斯 明天提醒我打電動", mentioned=False)
+    assert r.text == "不行" and len(core.store.user_reminders(7)) == 1
+
+
+def test_rule_image_and_validation(core):
+    from reminderbot import rules
+    rule = add_rule(core, who="any", words="早", replies="")
+    core.set_images(f"r{rule['id']}", ["a.png"])
+    [(_, r)] = Chat(core).say(MING, "賈維斯 早", mentioned=False)
+    assert r.image == f"r{rule['id']}/a.png" and r.text == ""
+    _, errors = rules.from_form({"call": "no", "words": ""}, 9)
+    assert errors
+    _, errors = rules.from_form({"who": "list", "users": ""}, 9)
+    assert errors
+    r, _ = rules.from_form({"who": "list", "users": "710078103703257151, 123456789012"}, 9)
+    assert r["users"] == [710078103703257151, 123456789012]
+    assert "指定的人" in rules.summary(r)
+
+
+async def test_web_rules(tmp_path):
+    from aiohttp import FormData
+    from reminderbot import rules
+    cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path=str(tmp_path / "r.db"), tz=TZ,
+                 web_host="127.0.0.1", web_port=0, admin_email="", web_password="", owner_id=7,
+                 reminder_channel_id=1)
+    store = SqliteStore(cfg.db_path)
+    core = Assistant(store, TZ, owner_id=7)
+
+    async def fetch_user(i):
+        raise LookupError
+    bot = SimpleNamespace(config=cfg, tz=TZ, store=store, core=core, get_user=lambda i: None, fetch_user=fetch_user)
+    client = TestClient(TestServer(make_app(bot)))
+    await client.start_server()
+    try:
+        r = await client.post("/rules/new", data={"name": "壞", "call": "no", "words": ""})
+        assert "沒存到" in await r.text() and not rules.load(store)
+        for name in ("一", "二"):
+            r = await client.post("/rules/new", data={"name": name, "on": "on", "words": "早", "replies": "早安"},
+                                  allow_redirects=False)
+            assert r.status == 303
+        assert [x["name"] for x in rules.load(store)] == ["一", "二"]
+        await client.post("/rules/2/up")
+        assert [x["name"] for x in rules.load(store)] == ["二", "一"]
+        await client.post("/rules/1", data={"name": "一改", "on": "on", "who": "owner"})
+        assert rules.load(store)[1]["name"] == "一改" and rules.load(store)[1]["who"] == "owner"
+        form = FormData()
+        form.add_field("files", PNG, filename="a.png", content_type="image/png")
+        r = await client.post("/images/r1/upload?back=rules", data=form, allow_redirects=False)
+        assert r.headers["Location"].startswith("/rules") and len(core.images("r1")) == 1
+        assert "/images/r1/" in await (await client.get("/rules")).text()
+        assert (await client.get("/images/builtin/stark.png")).status == 200
+        await client.post("/rules/1/delete")
+        assert [x["id"] for x in rules.load(store)] == [2] and core.images("r1") == []
+        assert not (tmp_path / "images" / "r1").exists()
+        await client.post("/rules/new", data={"name": "三", "words": "x"})
+        assert rules.load(store)[-1]["id"] == 3                     # 刪掉的編號不重用
     finally:
         await client.close()

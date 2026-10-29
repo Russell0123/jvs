@@ -8,8 +8,8 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 
-from reminderbot import timeparse, weather
-from reminderbot.explain import describe, rules
+from reminderbot import rules, timeparse, weather
+from reminderbot.explain import describe, rules as logic_rules
 from reminderbot.core import Assistant, Edit, Incoming, NeedWeather, Send, User
 from reminderbot.settings import (COUNTIES, DEFAULTS, GROUPS, HINTS, LABELS, MULTILINE_KEYS, REPLY_GROUPS, REPLY_KEYS,
                                   SETTING_KEYS, note_categories, validate, wish_lists)
@@ -37,6 +37,11 @@ class Sim:
         self._eph: int | None = None           # / 指令的回覆只給這個人看
         self.next_id = 1
         self.store.save_settings({"weather_county": "臺北市"})
+        # 示範一條自訂規則（在「規則」頁可以改）
+        demo, _ = rules.from_form({"name": "催作業", "on": "on", "who": "others", "call": "no", "words": "作業/報告",
+                                   "not_words": "交了/寫完", "replies": "{名字}快去寫\n還不寫？", "cooldown": "10"}, 1)
+        rules.save(self.store, [demo])
+        self.store.set_meta("rule_seq", 1)
 
     # ---------- 給 JS 的方法 ----------
     def info(self) -> str:
@@ -47,6 +52,8 @@ class Sim:
             "channels": [{"id": k, "name": v} for k, v in CHANNELS.items()],
             "defaults": DEFAULTS, "labels": LABELS, "hints": HINTS, "groups": GROUPS, "reply_groups": REPLY_GROUPS, "counties": COUNTIES,
             "multiline": MULTILINE_KEYS,
+            "rule_choices": {"who": rules.WHO, "call": rules.CALL, "task": rules.TASK, "mode": rules.MODE},
+            "rule_blank": rules.BLANK,
         }, ensure_ascii=False)
 
     def say(self, user_id: int, text: str, reply_to: int | None = None, tag: str = "", mentioned: bool = True,
@@ -116,11 +123,15 @@ class Sim:
 
     def slash(self, user_id: int, name: str, arg: str = "", channel: int = CHANNEL) -> str:
         """/說明、/設定、/天氣：回覆只有本人看得到。"""
-        cmd = {"說明": "help", "設定": "settings", "天氣": "weather"}.get(name.strip("/ "), name)
+        cmd = {"說明": "help", "設定": "settings", "天氣": "weather", "提醒": "reminders",
+               "stark says": "stark"}.get(name.strip("/ ").lower(), name)
+        # Stark says：回頻道裡最新一則別人的訊息
+        target = next((m["id"] for m in reversed(self.messages) if m["channel"] == int(channel)
+                       and m["author"] not in (0, BOT_ID, int(user_id))), None)
         self._eph = int(user_id)
         try:
             self._run(self.core.slash(cmd, MEMBERS[int(user_id)], self.now, int(channel), arg,
-                                      settings_url="https://158-179-177-8.sslip.io"))
+                                      settings_url="https://158-179-177-8.sslip.io", target_id=target))
         finally:
             self._eph = None
         return self.state()
@@ -143,18 +154,48 @@ class Sim:
         self._add(author=0, text=text)
         return self.state()
 
+    def rule_save(self, form_json: str, rid: int = 0) -> str:
+        all_rules = rules.load(self.store)
+        rid = int(rid) or max([int(self.store.get_meta("rule_seq") or 0)] + [r["id"] for r in all_rules]) + 1
+        rule, errors = rules.from_form(json.loads(form_json), rid)
+        if errors:
+            return self.state("沒存到：" + "；".join(errors))
+        if any(r["id"] == rid for r in all_rules):
+            all_rules = [rule if r["id"] == rid else r for r in all_rules]
+        else:
+            all_rules.append(rule)
+            self.store.set_meta("rule_seq", rid)
+        rules.save(self.store, all_rules)
+        return self.state("已儲存")
+
+    def rule_delete(self, rid: int) -> str:
+        rules.save(self.store, [r for r in rules.load(self.store) if r["id"] != int(rid)])
+        self.core.set_images(f"r{int(rid)}", [])
+        return self.state("已刪除")
+
+    def rule_up(self, rid: int) -> str:
+        all_rules = rules.load(self.store)
+        i = next((i for i, r in enumerate(all_rules) if r["id"] == int(rid)), 0)
+        if i:
+            all_rules[i - 1], all_rules[i] = all_rules[i], all_rules[i - 1]
+            rules.save(self.store, all_rules)
+        return self.state()
+
     def set_images(self, group: str, names_json: str) -> str:
         """測試台的圖庫：圖片本身留在瀏覽器，這裡只記檔名。"""
         self.core.set_images(group, json.loads(names_json))
         return self.state()
 
     def restart(self, start_ms: float) -> str:
-        """清空並把時間設到指定時刻（批次測試要固定起點，結果才能重現）。"""
+        """清空並把時間設到指定時刻（批次測試要固定起點，結果才能重現）。自訂規則保留。"""
+        keep = {k: self.store.get_meta(k) for k in ("rules", "rule_seq")}
         self.__init__(start_ms)
+        for k, v in keep.items():
+            self.store.set_meta(k, v)
         return self.state()
 
     def logic(self) -> str:
-        return json.dumps(rules(self.store.settings()), ensure_ascii=False)
+        return json.dumps(logic_rules(self.store.settings()), ensure_ascii=False)
 
     def explain(self, text: str) -> str:
         from reminderbot.router import route
@@ -198,6 +239,7 @@ class Sim:
             "lists": [n for n, _ in wish_lists(self.store.settings())] +
                      [n for n, _ in note_categories(self.store.settings())],
             "settings": self.store.settings(),
+            "rules": [{**r, "summary": rules.summary(r)} for r in rules.load(self.store)],
             "next_event": (lambda t: timeparse.fmt_dt(t, TZ) if t else None)(self.core.next_event_at(self.now)),
             "note": note,
             "fake_rain": self.fake_rain,

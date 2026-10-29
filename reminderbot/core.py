@@ -16,6 +16,7 @@ from datetime import datetime, time, timedelta
 
 from . import timeparse, weather
 from .router import REMINDER_RE, Intent, clean_reminder_text, extract_wishes, fuzzy_match, route
+from . import rules
 from .settings import find_county, phrases, topics, wish_acks, wish_verb
 
 HELP = """**我會做這些事**
@@ -32,7 +33,7 @@ HELP = """**我會做這些事**
 💤 **延後**：`後天再提醒我`、`晚兩個小時再提醒`
 ↩️ **回覆提醒**：`好`、`不用了`、`改成十分鐘後`
 🌤️ **天氣**：`天氣`、`明天會下雨嗎`、`我在台中`
-⌨️ **指令**：`/說明`、`/設定`、`/天氣`"""
+⌨️ **指令**：`/說明`、`/設定`、`/天氣`、`/stark says`，或在訊息上按右鍵 → 應用程式 → Stark says"""
 
 DRAFT_MINUTES = 30          # 問了時間之後，多久內回答都算數
 FAR_FUTURE = 4102444800     # 2100 年：下雨天提醒這種「看情況」的，平常不會到期
@@ -218,7 +219,50 @@ class Assistant:
         return t.strip()
 
     def handle(self, msg: Incoming, now: datetime) -> list:
+        """自訂規則先比對：「取代」就只回規則的；「另外回」就原本的照做再補一則。"""
         s = self.store.settings()
+        rule = self._rule_for(msg, now, s)
+        if rule and rule["mode"] == "replace":
+            self.last_intent = Intent("rule", text=rule["name"])
+            return self._rule_reply(rule, msg, now, s)
+        out = self._handle(msg, now, s)
+        if rule:
+            if not out or not self.last_intent or self.last_intent.kind == "unknown":
+                self.last_intent = Intent("rule", text=rule["name"])
+            out = out + self._rule_reply(rule, msg, now, s)
+        return out
+
+    def _rule_for(self, msg: Incoming, now: datetime, s: dict) -> dict | None:
+        text = re.sub(r"<@[!&]?\d+>", " ", msg.text).strip()
+        called = msg.mentioned or bool(re.search(self._names_re(s), text, re.I))
+        clean = self._strip_call(text, s) if called else text
+        has_task = None
+        for r in rules.load(self.store):
+            if r["task"] != "any" and has_task is None:
+                has_task = bool(clean) and route(clean, now, s).kind != "unknown"
+            if not rules.matches(r, author_id=msg.author.id, owner=self.is_owner(msg.author.id), called=called,
+                                 has_task=bool(has_task), text=text):
+                continue
+            key = f"rulefire:{r['id']}:{msg.channel_id}"
+            if r["cooldown"] and now.timestamp() - (self.store.get_meta(key) or 0) < r["cooldown"] * 60:
+                continue
+            self.store.set_meta(key, int(now.timestamp()))
+            return r
+        return None
+
+    def _rule_reply(self, rule: dict, msg: Incoming, now: datetime, s: dict) -> list:
+        rng = random.Random((msg.message_id or int(now.timestamp())) + rule["id"])
+        pool = [p for p in rule["replies"].splitlines() if p.strip()]
+        text = self.fill_pool(f"rule:{rule['id']}", pool, rng, now, msg.author.name) if pool else ""
+        imgs = self.images(f"r{rule['id']}")
+        image = f"r{rule['id']}/{rng.choice(imgs)}" if imgs else ""
+        if not text and not image:
+            return []
+        out = self._reply(msg, text)
+        out[0].image = image
+        return out
+
+    def _handle(self, msg: Incoming, now: datetime, s: dict) -> list:
         text = re.sub(r"<@[!&]?\d+>", " ", msg.text).strip()
         rng = random.Random(msg.message_id or int(now.timestamp()))
         owner = self.is_owner(msg.author.id)
@@ -283,12 +327,15 @@ class Assistant:
         """打招呼：回一句（可以用 {時段} {名字} {天氣}），有圖庫就隨機附一張。"""
         rare = rng.random() * 100 < float(s["greet_rare_percent"])
         key = "greet_rare_phrases" if rare else "greet_phrases"
+        text = self.fill_pool(key, phrases(s, key), rng, now, name)
+        return text, self.pick_image("rare" if rare else "greet", s, rng)
+
+    def fill_pool(self, key: str, pool: list[str], rng, now: datetime | None, name: str) -> str:
+        """挑一句，套上 {時段} {名字} {天氣}；還沒有天氣就先跳過講到天氣的句子。"""
         values = {"時段": self._daypart(now), "名字": name or "", "天氣": self._weather_now(now)}
-        pool = phrases(s, key)
         if not values["天氣"]:
             pool = [p for p in pool if "{天氣}" not in p] or pool
-        text = self.pick(key, pool, rng, **values)
-        return text, self.pick_image("rare" if rare else "greet", s, rng)
+        return self.pick(key, pool, rng, **values)
 
     def _daypart(self, now: datetime | None) -> str:
         h = (now or datetime.now(self.tz)).astimezone(self.tz).hour
@@ -316,15 +363,19 @@ class Assistant:
         return f"{group}/{rng.choice(imgs)}"
 
     def slash(self, name: str, user: User, now: datetime, channel_id: int, arg: str = "",
-              settings_url: str = "") -> list:
-        """/ 指令：回覆只有本人看得到；不是主人就拒絕。"""
+              settings_url: str = "", target_id: int | None = None) -> list:
+        """/ 指令：誰都能用，回覆只有本人看得到（Stark says 除外，它會公開回覆 target_id 那則訊息）。"""
         s = self.store.settings()
         rng = random.Random(int(now.timestamp()))
 
         def say_(text, buttons=None):
             return [Send(channel_id, text, buttons or [], ephemeral=True)]
-        if s["owner_only"] and not self.is_owner(user.id):
-            return say_(self.phrase(s, "unknown_phrases", rng))
+        if name == "stark":
+            if not target_id:
+                return say_("找不到要回的訊息。")
+            imgs = self.images("stark")
+            image = f"stark/{rng.choice(imgs)}" if imgs else "builtin/stark.png"
+            return [Send(channel_id, arg[:2000], reply_to=target_id, image=image), *say_("👌")]
         if name == "help":
             return say_(HELP)
         if name == "settings":

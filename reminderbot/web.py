@@ -10,8 +10,8 @@ from urllib.parse import urlencode, urlparse
 
 from aiohttp import web
 
-from . import images, timeparse
-from .explain import describe, rules
+from . import images, rules, timeparse
+from .explain import describe, rules as logic_rules
 from .router import route
 from .settings import (COUNTIES, DEFAULTS, GROUPS, LABELS, MULTILINE_KEYS, REPLY_GROUPS, REPLY_KEYS, SETTING_KEYS,
                        note_categories, validate, wish_lists)
@@ -34,7 +34,7 @@ textarea{min-height:96px}.check{display:flex;gap:8px;align-items:center;margin:8
 .hint{color:var(--muted);font-size:12px;margin-top:2px}
 button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:9px 16px;font:inherit;cursor:pointer}
 button.small{padding:4px 10px;font-size:13px}button.danger{background:var(--danger)}button.ghost{background:transparent;color:var(--accent);border:1px solid var(--accent)}
-.bar{position:sticky;bottom:0;background:var(--bg);padding:12px 0;display:flex;gap:10px}
+.btnrow{margin-top:12px}.bar{position:sticky;bottom:0;background:var(--bg);padding:12px 0;display:flex;gap:10px}
 .flash{padding:10px 14px;border-radius:8px;margin-bottom:16px;background:color-mix(in srgb,var(--accent) 15%,transparent)}
 .flash.err{background:color-mix(in srgb,var(--danger) 18%,transparent)}
 table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -48,7 +48,8 @@ th{color:var(--muted);font-weight:500;white-space:nowrap}.wrap table{min-width:6
 def page(title: str, active: str, body: str, flash: str = "", error: bool = False) -> web.Response:
     nav = "".join(f'<a href="{href}" class="{"on" if key == active else ""}">{name}</a>'
                   for key, href, name in [("reminders", "/reminders", "提醒"), ("notes", "/notes", "清單"),
-                                          ("replies", "/replies", "回覆"), ("images", "/images", "圖片"),
+                                          ("replies", "/replies", "回覆"), ("rules", "/rules", "規則"),
+                                          ("images", "/images", "圖片"),
                                           ("logic", "/logic", "判斷"),
                                           ("settings", "/", "設定")])
     fl = f'<div class="flash{" err" if error else ""}">{flash}</div>' if flash else ""
@@ -257,7 +258,7 @@ def make_app(bot) -> web.Application:
         out = [f"<section><h2>試一句</h2><form class='rowform' method='get'><input type='text' name='q' "
                f"value='{escape(q, quote=True)}' placeholder='例如：每兩小時提醒我喝水'><button class='small'>看判斷</button>"
                f"</form>{result}</section>"]
-        for sec in rules(s):
+        for sec in logic_rules(s):
             rows = "".join(f"<tr><td><b>{escape(n)}</b></td><td>{escape(d)}</td><td>{escape('、'.join(w))}</td></tr>"
                            for n, d, w in sec["steps"])
             out.append(f"<section><h2>{escape(sec['title'])}</h2><div class='wrap'><table>"
@@ -275,16 +276,27 @@ def make_app(bot) -> web.Application:
                "，在「設定 → 叫它」改。稀有招呼沒放圖就不附。</p>"]
         for g, gname in images.GROUPS.items():
             names = bot.core.images(g)
-            tiles = "".join(
-                f"<figure><img src='/images/{g}/{escape(n, quote=True)}' loading='lazy' alt=''>"
-                f"<form method='post' action='/images/{g}/{escape(n, quote=True)}/delete' "
-                f"onsubmit=\"return confirm('刪掉這張？')\"><button class='ghost small'>刪除</button></form></figure>"
-                for n in names) or "<p class='tag'>還沒有圖</p>"
-            out.append(f"<section><h2>{gname}（{len(names)} 張）</h2>"
-                       f"<form class='rowform' method='post' action='/images/{g}/upload' enctype='multipart/form-data'>"
-                       f"<input type='file' name='files' accept='image/png,image/jpeg,image/gif,image/webp' multiple required>"
-                       f"<button class='small'>上傳</button></form><div class='gallery'>{tiles}</div></section>")
+            empty = ("<p class='tag'>沒放圖時用這張預設的：</p><div class='gallery'><figure>"
+                     "<img src='/images/builtin/stark.png' alt=''></figure></div>") if g == "stark" else ""
+            out.append(f"<section><h2>{gname}（{len(names)} 張）</h2>{gallery(g, names, '')}"
+                       f"{'' if names else empty}</section>")
         return page("圖片", "images", "".join(out), flash, error=bool(request.query.get("err")))
+
+    def gallery(group: str, names: list[str], back: str) -> str:
+        q = f"?back={back}" if back else ""
+        tiles = "".join(
+            f"<figure><img src='/images/{group}/{escape(n, quote=True)}' loading='lazy' alt=''>"
+            f"<form method='post' action='/images/{group}/{escape(n, quote=True)}/delete{q}' "
+            f"onsubmit=\"return confirm('刪掉這張？')\"><button class='ghost small'>刪除</button></form></figure>"
+            for n in names)
+        return (f"<form class='rowform' method='post' action='/images/{group}/upload{q}' enctype='multipart/form-data'>"
+                f"<input type='file' name='files' accept='image/png,image/jpeg,image/gif,image/webp' multiple required>"
+                f"<button class='small'>上傳</button></form>" + (f"<div class='gallery'>{tiles}</div>" if tiles else ""))
+
+    def back_to(request: web.Request, group: str, query: str) -> str:
+        if request.query.get("back") == "rules":
+            return f"/rules?{query}#{group}"
+        return f"/images?{query}"
 
     async def image_file(request: web.Request):
         p = images.path_of(img_root, f"{request.match_info['group']}/{request.match_info['name']}")
@@ -294,7 +306,7 @@ def make_app(bot) -> web.Application:
 
     async def image_upload(request: web.Request):
         group = request.match_info["group"]
-        if group not in images.GROUPS:
+        if not images.valid_group(group):
             raise web.HTTPNotFound()
         added, errors = [], []
         reader = await request.multipart()
@@ -309,16 +321,104 @@ def make_app(bot) -> web.Application:
         if added:
             bot.core.set_images(group, bot.core.images(group) + added)
         if errors:
-            raise web.HTTPSeeOther("/images?" + urlencode({"err": "沒存到 " + "；".join(errors)}))
-        raise web.HTTPSeeOther(f"/images?ok={len(added)}")
+            raise web.HTTPSeeOther(back_to(request, group, urlencode({"err": "沒存到 " + "；".join(errors)})))
+        raise web.HTTPSeeOther(back_to(request, group, f"ok={len(added)}"))
 
     async def image_delete(request: web.Request):
         group, name = request.match_info["group"], request.match_info["name"]
-        if group not in images.GROUPS:
+        if not images.valid_group(group):
             raise web.HTTPNotFound()
         images.delete(img_root, group, name)
         bot.core.set_images(group, [n for n in bot.core.images(group) if n != name])
-        raise web.HTTPSeeOther("/images")
+        raise web.HTTPSeeOther(back_to(request, group, ""))
+
+    # ---------- 自訂規則 ----------
+    def rule_fields(r: dict, who_names: str) -> str:
+        def sel(key, choices):
+            return f"<select name='{key}'>" + "".join(
+                f"<option value='{k}' {'selected' if r[key] == k else ''}>{v}</option>" for k, v in choices.items()) \
+                + "</select>"
+        val = lambda k: escape(str(r[k]), quote=True)  # noqa: E731
+        users = ", ".join(str(u) for u in r["users"])
+        return (
+            f"<label>名稱</label><input type='text' name='name' value='{val('name')}' placeholder='例如：吐槽報告'>"
+            f"<label class='check'><input type='checkbox' name='on' {'checked' if r['on'] else ''}> 啟用</label>"
+            f"<label>誰說的</label>{sel('who', rules.WHO)}"
+            f"<label>指定的人：Discord 使用者 ID，逗號分開{who_names}</label>"
+            f"<input type='text' name='users' value='{users}' placeholder='只有選「指定的人」才用到'>"
+            f"<label>要不要叫它</label>{sel('call', rules.CALL)}"
+            f"<label>有沒有交代事情</label>{sel('task', rules.TASK)}"
+            f"<label>包含以下任一個詞，用 / 分開，不填＝不限</label>"
+            f"<input type='text' name='words' value='{val('words')}' placeholder='報告/作業'>"
+            f"<label>但不包含</label><input type='text' name='not_words' value='{val('not_words')}' placeholder='交了'>"
+            f"<label>符合的話</label>{sel('mode', rules.MODE)}"
+            f"<label>回覆：一行一句隨機挑，可用 {{時段}} {{名字}} {{天氣}}，可以不填只回圖</label>"
+            f"<textarea name='replies' rows='3'>{escape(r['replies'])}</textarea>"
+            f"<label>冷卻：同一個頻道幾分鐘內只回一次，0＝不限</label>"
+            f"<input type='number' name='cooldown' min='0' value='{r['cooldown']}'>")
+
+    async def rules_page(request: web.Request, flash: str = "", error: bool = False, draft: dict | None = None):
+        all_rules = rules.load(bot.store)
+        if draft:
+            all_rules = [draft if r["id"] == draft["id"] else r for r in all_rules]
+        who = await names([u for r in all_rules for u in r["users"]])
+        flash = flash or escape(request.query.get("err", "")) or ("✅ 已儲存" if "ok" in request.query else "")
+        out = ["<p class='tag'>每則訊息照順序比對，第一條符合的規則生效。回覆和圖片可以只放一種，兩種都有就一起送。</p>"]
+        for i, r in enumerate(all_rules):
+            g = f"r{r['id']}"
+            names_txt = "：" + "、".join(who.get(u, str(u)) for u in r["users"]) if r["users"] else ""
+            out.append(
+                f"<section id='{g}'><h2>{escape(r['name'])}{'' if r['on'] else '（停用）'}</h2>"
+                f"<p class='tag'>{escape(rules.summary(r))}</p>"
+                f"<form method='post' action='/rules/{r['id']}'>{rule_fields(r, escape(names_txt))}"
+                f"<div class='btnrow'><button>儲存</button></div></form>"
+                f"<label>圖片：符合時隨機附一張</label>{gallery(g, bot.core.images(g), 'rules')}"
+                f"<div class='rowform' style='margin-top:10px'>"
+                + (f"<form method='post' action='/rules/{r['id']}/up'><button class='ghost small'>往上移</button></form>"
+                   if i else "") +
+                f"<form method='post' action='/rules/{r['id']}/delete' onsubmit=\"return confirm('刪掉這條規則和它的圖？')\">"
+                f"<button class='ghost small'>刪除</button></form></div></section>")
+        out.append(f"<section id='new'><h2>新增規則</h2><form method='post' action='/rules/new'>"
+                   f"{rule_fields(dict(rules.BLANK), '')}<div class='btnrow'><button>新增</button></div></form></section>")
+        return page("規則", "rules", "".join(out), flash, error)
+
+    async def rules_get(request: web.Request):
+        return await rules_page(request)
+
+    async def rule_save(request: web.Request):
+        form = dict(await request.post())
+        all_rules = rules.load(bot.store)
+        rid = request.match_info.get("id")
+        if rid is None:
+            rid = max([int(bot.store.get_meta("rule_seq") or 0)] + [r["id"] for r in all_rules]) + 1
+        rid = int(rid)
+        rule, errors = rules.from_form(form, rid)
+        if errors:
+            return await rules_page(request, "沒存到：" + escape("；".join(errors)), True,
+                                    rule if any(r["id"] == rid for r in all_rules) else None)
+        if any(r["id"] == rid for r in all_rules):
+            all_rules = [rule if r["id"] == rid else r for r in all_rules]
+        else:
+            all_rules.append(rule)
+            bot.store.set_meta("rule_seq", rid)
+        rules.save(bot.store, all_rules)
+        raise web.HTTPSeeOther(f"/rules?ok=1#r{rid}")
+
+    async def rule_delete(request: web.Request):
+        rid = int(request.match_info["id"])
+        rules.save(bot.store, [r for r in rules.load(bot.store) if r["id"] != rid])
+        images.delete_group(img_root, f"r{rid}")
+        bot.core.set_images(f"r{rid}", [])
+        raise web.HTTPSeeOther("/rules?ok=1")
+
+    async def rule_up(request: web.Request):
+        rid = int(request.match_info["id"])
+        all_rules = rules.load(bot.store)
+        i = next((i for i, r in enumerate(all_rules) if r["id"] == rid), 0)
+        if i:
+            all_rules[i - 1], all_rules[i] = all_rules[i], all_rules[i - 1]
+            rules.save(bot.store, all_rules)
+        raise web.HTTPSeeOther(f"/rules?ok=1#r{rid}")
 
     async def health(request: web.Request):
         return web.json_response({"ok": True, "discord_ready": bot.is_ready()})
@@ -332,6 +432,8 @@ def make_app(bot) -> web.Application:
         web.post(r"/reminders/{id:\d+}/edit", reminder_edit),
         web.get("/notes", notes_page), web.post(r"/notes/{id:\d+}/delete", note_delete),
         web.post(r"/notes/{id:\d+}/edit", note_edit), web.post("/notes/add", note_add),
+        web.get("/rules", rules_get), web.post("/rules/new", rule_save), web.post(r"/rules/{id:\d+}", rule_save),
+        web.post(r"/rules/{id:\d+}/delete", rule_delete), web.post(r"/rules/{id:\d+}/up", rule_up),
         web.get("/images", images_page), web.post(r"/images/{group}/upload", image_upload),
         web.get(r"/images/{group}/{name}", image_file), web.post(r"/images/{group}/{name}/delete", image_delete),
         web.get("/logic", logic_page), web.get("/healthz", health),

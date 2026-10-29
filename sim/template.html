@@ -188,7 +188,7 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
           <textarea id="input" rows="1" placeholder="說點什麼…" aria-label="訊息"></textarea>
           <button class="primary" type="submit">送出</button>
         </div>
-        <div class="hint">不勾 @jvs＝一般聊天，句子裡提到「賈維斯」也算叫它・/說明 /設定 /天氣・@小明 提醒別人</div>
+        <div class="hint">不勾 @jvs＝一般聊天，句子裡提到「賈維斯」也算叫它・/說明 /設定 /天氣 /提醒 /stark says・@小明 提醒別人</div>
       </form>
     </section>
 
@@ -206,6 +206,12 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
           <form id="replyForm" class="list"></form>
           <div class="actions"><button class="primary" type="button" data-save="replies">套用</button><button class="ghost" type="button" data-reset="replies">恢復預設</button><span class="toast" id="repliesToast"></span></div>
           <div class="list" id="imgPane"></div>
+        </div>
+
+        <div class="pane" data-pane="rules" hidden>
+          <div class="tag">每則訊息照順序比對，第一條符合的生效。回覆和圖片可以只放一種。</div>
+          <span class="toast" id="rulesToast"></span>
+          <div class="list" id="ruleList"></div>
         </div>
 
         <div class="pane" data-pane="logic" hidden>
@@ -253,7 +259,7 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const COLORS = { 1: "#c76a12", 2: "#2f8f6b", 3: "#a14fbf", 1000: "#3d55c9" };
-const TABS = [["rem", "提醒"], ["notes", "清單"], ["replies", "回覆"], ["logic", "判斷"], ["settings", "設定"], ["batch", "批次"]];
+const TABS = [["rem", "提醒"], ["notes", "清單"], ["replies", "回覆"], ["rules", "規則"], ["logic", "判斷"], ["settings", "設定"], ["batch", "批次"]];
 const STATUS = { pending: "等待", fired: "響了", done: "完成", cancelled: "取消", expired: "過期", draft: "問時間" };
 const PRESET = JSON.parse(document.getElementById("preset").textContent);
 let sim, info, state, me = 1, replyTo = null, pane = "rem";
@@ -413,7 +419,7 @@ function wire() {
     e.preventDefault();
     const text = $("#input").value.trim();
     if (!text) return;
-    const sl = text.match(/^\/(說明|設定|天氣)\s*(.*)$/);
+    const sl = text.match(/^\/(說明|設定|天氣|提醒|stark says)\s*(.*)$/i);
     if (sl) call("slash", me, sl[1], sl[2], +$("#where").value);
     else call("say", me, text, replyTo, "", $("#atjvs").checked, +$("#where").value);
     $("#input").value = ""; replyTo = null; $("#replybar").hidden = true;
@@ -449,15 +455,26 @@ function wire() {
   });
   $("#noteAdd").addEventListener("submit", e => { e.preventDefault(); call("note_add", $("#noteAddCat").value, $("#noteAddText").value); $("#noteAddText").value = ""; });
 
-  $("#imgPane").addEventListener("change", e => {
-    const g = e.target.dataset.img; if (!g) return;
+  document.addEventListener("change", e => {
+    const g = e.target.dataset && e.target.dataset.img; if (!g) return;
+    IMG_NAMES[g] = IMG_NAMES[g] || [];
     [...e.target.files].forEach((f, i) => { const n = `${Date.now()}${i}-${f.name}`; IMG_URLS[n] = URL.createObjectURL(f); IMG_NAMES[g].push(n); });
-    syncImages(); drawImages(); draw();
+    syncImages(); drawImages(); drawRules(); draw();
   });
-  $("#imgPane").addEventListener("click", e => {
-    const g = e.target.dataset.imgDel; if (!g) return;
+  document.addEventListener("click", e => {
+    const g = e.target.dataset && e.target.dataset.imgDel; if (!g) return;
     IMG_NAMES[g] = IMG_NAMES[g].filter(x => x !== e.target.dataset.name);
-    syncImages(); drawImages(); draw();
+    syncImages(); drawImages(); drawRules(); draw();
+  });
+  $("#ruleList").addEventListener("submit", e => {
+    e.preventDefault();
+    const fm = e.target, data = Object.fromEntries(new FormData(fm).entries());
+    ruleAction("rule_save", JSON.stringify(data), +fm.dataset.rule);
+  });
+  $("#ruleList").addEventListener("click", e => {
+    const fm = e.target.closest("[data-rule]"); if (!fm) return;
+    if (e.target.matches("[data-rule-up]")) ruleAction("rule_up", +fm.dataset.rule);
+    if (e.target.matches("[data-rule-del]") && confirm("刪掉這條規則？")) { delete IMG_NAMES["r" + fm.dataset.rule]; ruleAction("rule_delete", +fm.dataset.rule); }
   });
   for (const b of $$("[data-save]")) b.addEventListener("click", () => {
     const pg = b.dataset.save; call("save_settings", readForm(formEl(pg)), pg); $(`#${pg}Toast`).textContent = state.note; drawLogic();
@@ -488,17 +505,39 @@ function drawRain() {
   $("#rainHour").value = state.fake_rain == null ? -1 : state.fake_rain;
 }
 // 圖片只留在瀏覽器（object URL），Python 那邊只記檔名
-const IMG_URLS = {}, IMG_NAMES = { greet: [], rare: [] }, IMG_GROUPS = [["greet", "一般招呼"], ["rare", "稀有招呼"]];
+const IMG_URLS = { "stark.png": "/*__STARK__*/" }, IMG_NAMES = { greet: [], rare: [], stark: [] };
+const IMG_GROUPS = [["greet", "一般招呼"], ["rare", "稀有招呼"], ["stark", "Stark says（沒放就用預設那張）"]];
 function attachment(ref) {
   const url = IMG_URLS[ref.split("/").slice(1).join("/")];
   return url ? `<img class="att" src="${url}" alt="">` : `<div class="tag">🖼️ ${esc(ref)}</div>`;
 }
-function syncImages() { for (const [g] of IMG_GROUPS) state = JSON.parse(sim.set_images(g, JSON.stringify(IMG_NAMES[g]))); }
+function syncImages() { for (const g of Object.keys(IMG_NAMES)) state = JSON.parse(sim.set_images(g, JSON.stringify(IMG_NAMES[g]))); }
+const thumbs = g => `<input type="file" accept="image/*" multiple data-img="${g}"><div class="thumbs">${(IMG_NAMES[g] || []).map(x =>
+  `<span><img src="${IMG_URLS[x]}" alt=""><button type="button" data-img-del="${g}" data-name="${esc(x)}" aria-label="刪除">×</button></span>`).join("")}</div>`;
 function drawImages() {
   $("#imgPane").innerHTML = `<div class="sec-title">打招呼的圖片</div><div class="tag">打招呼時從分組隨機挑一張，機率在設定的「叫它」</div>` +
-    IMG_GROUPS.map(([g, n]) => `<label>${n}　<input type="file" accept="image/*" multiple data-img="${g}"></label>
-      <div class="thumbs">${IMG_NAMES[g].map(x => `<span><img src="${IMG_URLS[x]}" alt=""><button type="button" data-img-del="${g}" data-name="${esc(x)}" aria-label="刪除">×</button></span>`).join("")}</div>`).join("");
+    IMG_GROUPS.map(([g, n]) => `<label>${n}</label>${thumbs(g)}`).join("");
 }
+function drawRules() {
+  const C = info.rule_choices;
+  const sel = (k, v) => `<select name="${k}">${Object.entries(C[k]).map(([a, b]) => `<option value="${a}" ${a === v ? "selected" : ""}>${esc(b)}</option>`).join("")}</select>`;
+  const f = (label, html) => `<div class="field"><label>${label}</label>${html}</div>`;
+  const form = r => `<form class="item" data-rule="${r.id}">
+    ${r.id ? `<div class="sec-title">${esc(r.name)}${r.on ? "" : "（停用）"}</div><div class="tag">${esc(r.summary)}</div>` : `<div class="sec-title">新增規則</div>`}
+    ${f("名稱", `<input name="name" value="${esc(r.name)}">`)}
+    <label class="check"><input type="checkbox" name="on" ${r.on ? "checked" : ""}> 啟用</label>
+    ${f("誰說的", sel("who", r.who))}${f("指定的人 ID，逗號分開。測試台：你=1、小明=2、小美=3", `<input name="users" value="${esc(r.users.join(", "))}">`)}
+    ${f("要不要叫它", sel("call", r.call))}${f("有沒有交代事情", sel("task", r.task))}
+    ${f("包含以下任一個詞，用 / 分開", `<input name="words" value="${esc(r.words)}">`)}${f("但不包含", `<input name="not_words" value="${esc(r.not_words)}">`)}
+    ${f("符合的話", sel("mode", r.mode))}
+    ${f("回覆：一行一句，可用 {時段} {名字} {天氣}", `<textarea name="replies" rows="2">${esc(r.replies)}</textarea>`)}
+    ${f("冷卻分鐘，0＝不限", `<input type="number" min="0" name="cooldown" value="${r.cooldown}">`)}
+    ${r.id ? f("圖片：符合時隨機附一張", thumbs("r" + r.id)) : ""}
+    <div class="actions"><button class="primary">${r.id ? "儲存" : "新增"}</button>${r.id ? `<button class="ghost" type="button" data-rule-up>上移</button><button class="ghost" type="button" data-rule-del>刪除</button>` : ""}</div>
+  </form>`;
+  $("#ruleList").innerHTML = state.rules.map(form).join("") + form({ ...info.rule_blank });
+}
+function ruleAction(fn, ...args) { call(fn, ...args); $("#rulesToast").textContent = state.note || ""; drawRules(); }
 function drawForms() { drawForm($("#replyForm"), info.reply_groups); drawForm($("#settingsForm"), info.groups); }
 
 function runBatch(text, startLocal) {
@@ -533,7 +572,7 @@ function runBatch(text, startLocal) {
       reply = target ? target.id : null; mentioned = false; rest = mm[2];
     }
     if (rest.startsWith("~")) { mentioned = false; rest = rest.slice(1).trim(); }
-    const sl = rest.match(/^\/(說明|設定|天氣)\s*(.*)$/);
+    const sl = rest.match(/^\/(說明|設定|天氣|提醒|stark says)\s*(.*)$/i);
     if (sl) { state = JSON.parse(sim.slash(who, sl[1], sl[2], chan)); continue; }
     state = JSON.parse(sim.say(who, rest, reply, tag, mentioned, chan));
   }
@@ -555,7 +594,7 @@ async function boot() {
     info = JSON.parse(sim.info());
     wire();
     state = JSON.parse(sim.state());
-    drawForms(); drawImages(); drawLogic(); setPane("rem"); setView("chat"); drawRain();
+    drawForms(); drawImages(); drawRules(); drawLogic(); setPane("rem"); setView("chat"); drawRain();
     runBatch(PRESET, "2026-10-29T18:00");
     $("#loading").hidden = true;
   } catch (err) {

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import re
 from datetime import datetime
 
 import discord
@@ -184,10 +186,57 @@ class ReminderBot(discord.Client):
         async def reminders_cmd(interaction: discord.Interaction):
             await self._slash(interaction, "reminders")
 
+        stark = app_commands.Group(name="stark", description="Stark 語錄")
+
+        @stark.command(name="says", description="賈維斯拿 Stark 的圖回覆某則訊息")
+        @app_commands.describe(圖片="換一張圖（不放就用預設的）", 訊息="要回的訊息連結（不填就回頻道裡最新一則別人的訊息）",
+                               文字="順便說一句")
+        async def stark_cmd(interaction: discord.Interaction, 圖片: discord.Attachment | None = None,
+                            訊息: str = "", 文字: str = ""):
+            await self._stark(interaction, None, 圖片, 訊息, 文字)
+        self.tree.add_command(stark)
+
+        @self.tree.context_menu(name="Stark says")
+        async def stark_menu(interaction: discord.Interaction, message: discord.Message):
+            await self._stark(interaction, message)
+
         @self.tree.command(name="天氣", description="看天氣（只有你看得到）")
         @app_commands.describe(地點="例如：台中、明天、台中明天（不填就看你所在地）")
         async def weather_cmd(interaction: discord.Interaction, 地點: str = ""):
             await self._slash(interaction, "weather", 地點)
+
+    async def _stark(self, interaction: discord.Interaction, target: discord.Message | None,
+                     upload: discord.Attachment | None = None, link: str = "", text: str = ""):
+        """右鍵選單直接拿到那則訊息；/stark says 用連結找，沒給就找頻道裡最新一則別人的訊息。"""
+        if upload and not (upload.content_type or "").startswith("image/"):
+            await interaction.response.send_message("要放圖片喔。", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)     # 找訊息、下載圖可能超過 3 秒
+        channel = interaction.channel
+        if target is None and link.strip():
+            ids = re.findall(r"\d{15,}", link)
+            try:
+                ch = await self._channel(int(ids[-2])) if len(ids) >= 2 else channel
+                target = await ch.fetch_message(int(ids[-1])) if ids else None
+            except (discord.HTTPException, ValueError):
+                target = None
+        if target is None and not link.strip() and channel is not None:
+            async for m in channel.history(limit=30):
+                if m.author.id not in (interaction.user.id, self.user.id) and m.type == discord.MessageType.default:
+                    target = m
+                    break
+        actions = self.core.slash("stark", to_user(interaction.user), self.now(),
+                                  target.channel.id if target else interaction.channel_id or 0, text,
+                                  target_id=target.id if target else None)
+        for a in actions:
+            if a.ephemeral:
+                await interaction.followup.send(a.text, ephemeral=True)
+                continue
+            file = discord.File(io.BytesIO(await upload.read()), filename=upload.filename) if upload else None
+            if file is None and (p := images.path_of(images.folder(self.config.db_path), a.image)):
+                file = discord.File(p)
+            kwargs = {"file": file} if file else {}
+            await target.reply(a.text or None, mention_author=False, allowed_mentions=NO_PINGS, **kwargs)
 
     async def _slash(self, interaction: discord.Interaction, name: str, arg: str = ""):
         actions = self.core.slash(name, to_user(interaction.user), self.now(), interaction.channel_id or 0, arg,
@@ -288,7 +337,11 @@ class ReminderBot(discord.Client):
         if source is not None and a.reply_to == source.id:
             msg = await source.reply(text, mention_author=False, **kwargs)
         else:
-            msg = await (await self._channel(a.channel_id)).send(text, **kwargs)
+            channel = await self._channel(a.channel_id)
+            if a.reply_to:
+                kwargs["reference"] = discord.MessageReference(message_id=a.reply_to, channel_id=channel.id,
+                                                               fail_if_not_exists=False)
+            msg = await channel.send(text, **kwargs)
         if a.reminder_id:
             self.core.sent(a.reminder_id, msg.id, msg.channel.id)
 

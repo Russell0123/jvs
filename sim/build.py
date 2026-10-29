@@ -41,7 +41,9 @@ def main():
     payload = json.dumps(src, ensure_ascii=False).replace("</", "<\\/")
     preset = json.dumps((SIM / "preset.txt").read_text(encoding="utf-8"), ensure_ascii=False).replace("</", "<\\/")
     html = (SIM / "template.html").read_text(encoding="utf-8").replace("/*__PYSRC__*/", payload) \
-        .replace("/*__PRESET__*/", preset)
+        .replace("/*__PRESET__*/", preset) \
+        .replace("/*__STARK__*/", "data:image/png;base64," +
+                 base64.b64encode((ROOT / "reminderbot" / "assets" / "stark.png").read_bytes()).decode())
     if DIST.exists():
         shutil.rmtree(DIST)
     (DIST / "pyodide").mkdir(parents=True)
