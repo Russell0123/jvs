@@ -1,0 +1,460 @@
+<meta charset="utf-8">
+<title>jvs 測試台</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* 版面：左邊是頻道聊天（主角），右邊是「時間機器＋資料＋設定」工具欄；手機改成上方分頁。 */
+:root {
+  --bg: #eef0f4; --surface: #ffffff; --surface-2: #f6f7fa; --fg: #1a1f2c; --muted: #5f6b80; --line: #dde1e9;
+  --accent: #c76a12; --accent-soft: #fbe9d6; --accent-ink: #ffffff;
+  --bot: #3d55c9; --mention: #e3e8fb; --mention-fg: #2c43b3;
+  --ok: #23845a; --ok-soft: #dcf2e7; --warn: #b4580b; --danger: #c93c3c; --danger-soft: #fbe2e2;
+  --font-body: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12151c; --surface: #1a1e28; --surface-2: #212634; --fg: #e8eaf0; --muted: #9aa3b6; --line: #2b3142;
+  --accent: #f29a45; --accent-soft: #3a2a1a; --accent-ink: #1a1206;
+  --bot: #93a5ff; --mention: #28305a; --mention-fg: #b9c5ff;
+  --ok: #4cc28a; --ok-soft: #173327; --warn: #f0a050; --danger: #ff7a7a; --danger-soft: #3a1d1f; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12151c; --surface: #1a1e28; --surface-2: #212634; --fg: #e8eaf0; --muted: #9aa3b6; --line: #2b3142;
+  --accent: #f29a45; --accent-soft: #3a2a1a; --accent-ink: #1a1206;
+  --bot: #93a5ff; --mention: #28305a; --mention-fg: #b9c5ff;
+  --ok: #4cc28a; --ok-soft: #173327; --warn: #f0a050; --danger: #ff7a7a; --danger-soft: #3a1d1f; color-scheme: dark }
+
+html, body { height: 100%; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.6 var(--font-body); }
+* { box-sizing: border-box; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.app { height: 100%; display: grid; grid-template-rows: auto 1fr; }
+.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--surface); border-bottom: 1px solid var(--line);
+  padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.brand { font-weight: 700; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+.brand .hash { color: var(--muted); font-weight: 500; }
+.clock { margin-left: auto; display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-weight: 700;
+  background: var(--accent-soft); color: var(--accent); padding: 4px 10px; border-radius: 999px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.clock small { font-family: var(--font-body); font-weight: 500; font-size: 12px; opacity: .85; }
+.tabs { display: none; gap: 4px; width: 100%; overflow-x: auto; }
+.tabs button { border: 0; background: transparent; padding: 6px 12px; border-radius: 8px; color: var(--muted); white-space: nowrap; }
+.tabs button.on { background: var(--surface-2); color: var(--fg); font-weight: 700; }
+
+.main { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 360px; }
+.chat { min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); border-right: 1px solid var(--line); }
+.log { overflow-y: auto; padding-block: 12px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: 16px; display: flex; flex-direction: column; gap: 2px; }
+.day { align-self: center; font-size: 12px; color: var(--muted); padding: 6px 0; }
+.msg { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 10px; padding: 6px 8px; border-radius: 8px; }
+.msg:hover { background: var(--surface-2); }
+.msg.pinged { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
+.avatar { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 14px; color: #fff; }
+.who { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.who b { font-weight: 700; }
+.who .botname { color: var(--bot); }
+.tagbot { font-size: 10px; background: var(--bot); color: var(--surface); padding: 0 5px; border-radius: 4px; font-weight: 700; letter-spacing: .04em; }
+.who time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.who .act { margin-left: auto; border: 0; background: none; color: var(--muted); font-size: 12px; padding: 0 4px; }
+.who .act:hover { color: var(--accent); }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.text code { font-family: var(--font-mono); font-size: 13px; background: var(--surface-2); border: 1px solid var(--line); padding: 0 4px; border-radius: 4px; }
+.text .sub { display: block; font-size: 12px; color: var(--muted); }
+.mention { background: var(--mention); color: var(--mention-fg); border-radius: 4px; padding: 0 3px; font-weight: 500; }
+.replyto { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; margin-bottom: 2px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.replyto::before { content: "↱"; }
+.eph { font-size: 12px; color: var(--muted); }
+.btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.btns button { border: 0; border-radius: 6px; padding: 4px 12px; font-size: 14px; background: var(--surface-2); border: 1px solid var(--line); }
+.btns button.success { background: var(--ok); color: #fff; border-color: var(--ok); }
+.btns button:hover { filter: brightness(1.06); }
+.intent { margin-top: 4px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.intent .pill { background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 1px 8px; font-weight: 700; }
+.intent .pill.unknown { background: var(--danger-soft); color: var(--danger); }
+.intent .detail { color: var(--muted); }
+.intent .flag { border: 1px dashed var(--line); background: none; border-radius: 999px; padding: 0 8px; color: var(--muted); font-size: 12px; }
+.intent .flag.on { border-style: solid; border-color: var(--danger); color: var(--danger); }
+
+.composer { border-top: 1px solid var(--line); background: var(--surface); display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr);
+  padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: 16px; }
+.examples { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.examples button { flex: none; border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px; padding: 2px 10px; font-size: 13px; color: var(--muted); }
+.examples button:hover { color: var(--fg); border-color: var(--accent); }
+.replybar { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); background: var(--surface-2); padding: 4px 10px; border-radius: 6px; }
+.replybar button { margin-left: auto; border: 0; background: none; color: var(--muted); }
+.row { display: flex; gap: 8px; align-items: flex-end; }
+.row select { border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 8px; flex: none; }
+.row textarea { flex: 1; min-width: 0; resize: none; border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 8px 10px; height: 42px; max-height: 120px; }
+.primary { border: 0; background: var(--accent); color: var(--accent-ink); border-radius: 8px; padding: 8px 16px; font-weight: 700; }
+.hint { font-size: 12px; color: var(--muted); }
+
+.side { min-height: 0; overflow-y: auto; background: var(--surface); }
+.side-tabs { position: sticky; top: 0; display: flex; gap: 2px; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--line); z-index: 1; }
+.side-tabs button { border: 0; background: none; padding: 6px 10px; border-radius: 8px; color: var(--muted); }
+.side-tabs button.on { background: var(--surface-2); color: var(--fg); font-weight: 700; }
+.pane { padding: 16px; padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 14px; align-content: start; }
+.pane h3 { margin: 0; font-size: 14px; }
+.pane p { margin: 0; color: var(--muted); font-size: 13px; }
+.bigclock { font-family: var(--font-mono); font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.ghost { border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 6px 8px; }
+.ghost:hover { border-color: var(--accent); }
+.wide { width: 100%; }
+.next { font-size: 13px; color: var(--muted); }
+.inline { display: flex; gap: 6px; }
+.inline input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 6px 8px; }
+.list { display: grid; gap: 8px; }
+.item { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; gap: 2px; font-size: 14px; }
+.item .meta { font-size: 12px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; }
+.status { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 0 7px; }
+.status.pending { background: var(--accent-soft); color: var(--accent); }
+.status.fired { background: var(--danger-soft); color: var(--danger); }
+.status.done { background: var(--ok-soft); color: var(--ok); }
+.status.cancelled, .status.expired { background: var(--surface-2); color: var(--muted); }
+.field { display: grid; gap: 4px; }
+.field label { font-size: 13px; color: var(--muted); }
+.field input[type=text], .field input[type=number], .field select, .field textarea { border: 1px solid var(--line); background: var(--surface-2); border-radius: 6px; padding: 6px 8px; width: 100%; }
+.field textarea { min-height: 96px; }
+.check { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 10px; }
+legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; }
+.toast { font-size: 13px; color: var(--ok); }
+.report textarea { width: 100%; min-height: 160px; border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 8px; font-size: 13px; }
+.flagitem { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.flagitem .said { font-weight: 500; }
+.flagitem .got { font-size: 12px; color: var(--muted); }
+.flagitem input { border: 1px solid var(--line); background: var(--surface-2); border-radius: 6px; padding: 5px 8px; width: 100%; }
+
+.loading { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 20;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.loading .box { max-width: 420px; display: grid; gap: 10px; text-align: center; }
+.loading .bar { height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; }
+.loading .bar i { display: block; height: 100%; width: 30%; background: var(--accent); border-radius: 999px; animation: slide 1.2s ease-in-out infinite; }
+@keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) { .loading .bar i { animation: none; width: 60%; } }
+.loading .err { color: var(--danger); text-align: left; font-size: 13px; white-space: pre-wrap; }
+
+@media (max-width: 820px) {
+  .tabs { display: flex; }
+  .main { grid-template-columns: minmax(0, 1fr); }
+  .chat { border-right: 0; }
+  .side-tabs { display: none; }
+  .main[data-view="chat"] .side { display: none; }
+  .main:not([data-view="chat"]) .chat { display: none; }
+  .clock { margin-left: 0; }
+  .log { padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .composer { padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .row select { max-width: 6.5em; }
+}
+</style>
+
+<div class="app">
+  <header class="top">
+    <div class="brand"><span class="hash">#</span>助理測試台</div>
+    <div class="clock" id="clock" title="測試台的虛擬時間"><small>現在</small><span id="clockText">—</span></div>
+    <nav class="tabs" id="tabs">
+      <button data-view="chat" class="on">聊天</button>
+      <button data-view="time">時間</button>
+      <button data-view="rem">提醒</button>
+      <button data-view="notes">記事</button>
+      <button data-view="settings">設定</button>
+      <button data-view="report">回報</button>
+    </nav>
+  </header>
+
+  <div class="main" id="main" data-view="chat">
+    <section class="chat" aria-label="頻道">
+      <div class="log" id="log" aria-live="polite"></div>
+      <form class="composer" id="composer">
+        <div class="examples" id="examples"></div>
+        <div class="replybar" id="replybar" hidden><span id="replyText"></span><button type="button" id="replyCancel" aria-label="取消回覆">✕</button></div>
+        <div class="row">
+          <select id="who" aria-label="用誰的身分說話"></select>
+          <textarea id="input" rows="1" placeholder="跟 jvs 說…（不用打 @jvs）" aria-label="訊息"></textarea>
+          <button class="primary" id="send" type="submit">送出</button>
+        </div>
+        <div class="hint">在句子裡打 <code>@小明</code>、<code>@小美</code>、<code>@樂團</code> 就是提醒別人。按 jvs 訊息上的「回覆」可以回覆提醒（例如說「延後 30 分鐘」）。</div>
+      </form>
+    </section>
+
+    <aside class="side" id="side">
+      <div class="side-tabs" id="sideTabs">
+        <button data-view="time" class="on">時間</button>
+        <button data-view="rem">提醒</button>
+        <button data-view="notes">記事</button>
+        <button data-view="settings">設定</button>
+        <button data-view="report">回報</button>
+      </div>
+
+      <div class="pane" data-pane="time">
+        <h3>時間機器</h3>
+        <p>測試台的時間不會自己走。按下面的按鈕快轉，就能看到提醒什麼時候響、沒按完成會不會再提醒。</p>
+        <div class="bigclock" id="bigclock">—</div>
+        <div class="grid4">
+          <button class="ghost" data-adv="60">+1 分</button>
+          <button class="ghost" data-adv="600">+10 分</button>
+          <button class="ghost" data-adv="3600">+1 小時</button>
+          <button class="ghost" data-adv="86400">+1 天</button>
+        </div>
+        <button class="primary wide" id="jump">跳到下一個提醒</button>
+        <div class="next" id="nextEvent"></div>
+        <div class="field">
+          <label for="setTime">跳到指定時間（只能往後；往前撥不會補跑提醒）</label>
+          <div class="inline"><input type="datetime-local" id="setTime"><button class="ghost" id="setTimeGo">前往</button></div>
+        </div>
+        <button class="ghost wide" id="clearAll">清空對話和資料，重新開始</button>
+      </div>
+
+      <div class="pane" data-pane="rem" hidden>
+        <h3>所有提醒</h3>
+        <p>跟正式上線的設定網頁「提醒」頁一樣，這裡看得到每個人的提醒。</p>
+        <div class="list" id="remList"></div>
+      </div>
+
+      <div class="pane" data-pane="notes" hidden>
+        <h3>所有記事</h3>
+        <div class="list" id="noteList"></div>
+      </div>
+
+      <div class="pane" data-pane="settings" hidden>
+        <h3>設定</h3>
+        <p>跟正式上線的設定網頁同一組欄位。改完按「套用」，下一句話就生效。</p>
+        <form id="settingsForm" class="list"></form>
+        <div class="inline"><button class="primary" id="saveSettings" type="button">套用</button><button class="ghost" id="resetSettings" type="button">恢復預設</button></div>
+        <div class="toast" id="settingsToast" aria-live="polite"></div>
+      </div>
+
+      <div class="pane report" data-pane="report" hidden>
+        <h3>判斷錯誤回報</h3>
+        <p>在聊天裡按句子下面的「判斷錯了」就會收進這裡。每句寫下你原本的意思，再按「複製」把全部貼給 Claude，我會改規則、加進測試。</p>
+        <div class="list" id="flagList"></div>
+        <textarea id="reportText" readonly aria-label="回報內容"></textarea>
+        <button class="primary" id="copyReport" type="button">複製回報內容</button>
+        <div class="toast" id="copyToast" aria-live="polite"></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div class="loading" id="loading">
+  <div class="box">
+    <b>正在啟動 jvs…</b>
+    <div class="bar"><i></i></div>
+    <div class="hint" id="loadStep">載入 Python 執行環境（約 14MB，第一次會久一點）</div>
+    <div class="err" id="loadErr" hidden></div>
+  </div>
+</div>
+
+<script type="application/json" id="pysrc">/*__PYSRC__*/</script>
+<script src="pyodide/pyodide.js"></script>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const COLORS = { 1: "#c76a12", 2: "#2f8f6b", 3: "#a14fbf", 1000: "#3d55c9" };
+const EXAMPLES = ["明天下午3點提醒我交報告", "10分鐘後叫我關火", "每天早上8點提醒我吃藥", "提醒 @小明 下週三 交作業",
+  "計時 1 分鐘", "我想看 葬送的芙莉蓮", "記住 靈感：會唱歌的貓", "我有哪些提醒", "我想看什麼", "天氣", "說明"];
+
+let sim, info, state, me = 1, replyTo = null;
+const flags = new Map();   // 訊息 id → {said, got, expect}
+
+function esc(s) { return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function nameOf(id) { if (+id === 1000) return "jvs"; const m = info.members.find(m => m.id === +id); return m ? m.name : id; }
+function render(text) {
+  // Discord 風格的 markdown（只做 bot 會用到的幾種）
+  let h = esc(text);
+  h = h.replace(/&lt;@&amp;(\d+)&gt;/g, (_, id) => `<span class="mention">@${esc((info.roles.find(r => r.id === +id) || {}).name || id)}</span>`);
+  h = h.replace(/&lt;@!?(\d+)&gt;/g, (_, id) => `<span class="mention">@${esc(String(nameOf(id)))}</span>`);
+  h = h.replace(/~~([\s\S]+?)~~/g, "<s>$1</s>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/__(.+?)__/g, "<u>$1</u>")
+       .replace(/`([^`]+)`/g, "<code>$1</code>");
+  // 「-# 」開頭是小字行（區塊元素），前後不要再多一個換行，不然會空一行
+  const lines = h.split("\n");
+  return lines.map((l, i) => {
+    const sub = l.startsWith("-# "), prevSub = i > 0 && lines[i - 1].startsWith("-# ");
+    const sep = i === 0 || sub || prevSub ? "" : "\n";
+    return sep + (sub ? `<span class="sub">${l.slice(3)}</span>` : l);
+  }).join("");
+}
+
+function call(method, ...args) {
+  state = JSON.parse(sim[method](...args));
+  draw();
+}
+
+function draw() {
+  $("#clockText").textContent = state.now_label;
+  $("#bigclock").textContent = state.now_label;
+  $("#nextEvent").textContent = state.next_event ? `下一件事：${state.next_event}` : "目前沒有等待中的提醒。";
+  $("#jump").disabled = !state.next_event;
+  drawLog(); drawReminders(); drawNotes(); drawFlags();
+  if (!$("#settingsForm").dataset.ready) drawSettings();
+}
+
+function drawLog() {
+  const log = $("#log");
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  let lastDate = null, html = "";
+  for (const m of state.messages) {
+    if (m.ephemeral_for && m.ephemeral_for !== me) continue;
+    if (m.date !== lastDate) { html += `<div class="day">${esc(m.date)}</div>`; lastDate = m.date; }
+    const isBot = m.author === 1000;
+    const pinged = m.ping && new RegExp(`<@${me}>|<@&(${info.members.find(x => x.id === me).roles.join("|") || "x"})>`).test(m.text);
+    const ref = m.reply_to && state.messages.find(x => x.id === m.reply_to);
+    const refHtml = ref ? `<div class="replyto">${esc(nameOf(ref.author))}：${esc(ref.text.replace(/<@&?\d+>/g, "").replace(/\n/g, " ").slice(0, 60))}</div>` : "";
+    const btns = m.buttons.length ? `<div class="btns">${m.buttons.map(b =>
+      `<button class="${b.style}" data-press="${esc(b.custom_id)}" data-mid="${m.id}">${b.emoji} ${esc(b.label)}</button>`).join("")}</div>` : "";
+    let intent = "";
+    if (m.intent) {
+      const f = flags.has(m.id);
+      intent = `<div class="intent"><span class="pill ${m.intent.kind === "unknown" ? "unknown" : ""}">判斷：${esc(m.intent.label)}</span>
+        <span class="detail">${esc(m.intent.detail)}</span>
+        <button class="flag ${f ? "on" : ""}" data-flag="${m.id}">${f ? "已標記，到「回報」寫下原意" : "判斷錯了"}</button></div>`;
+    }
+    const shown = isBot ? m.text : m.text.replace(/^<@1000>\s*/, "");
+    html += `<article class="msg ${pinged ? "pinged" : ""}">
+      <div class="avatar" style="background:${COLORS[m.author] || "#777"}" aria-hidden="true">${esc(String(nameOf(m.author)).slice(0, 1).toUpperCase())}</div>
+      <div style="min-width:0">${refHtml}
+        <div class="who"><b class="${isBot ? "botname" : ""}">${esc(String(nameOf(m.author)))}</b>${isBot ? '<span class="tagbot">BOT</span>' : ""}
+          <time>${esc(m.time)}</time>${m.ephemeral_for ? '<span class="eph">只有你看得到</span>' : ""}
+          ${isBot && !m.ephemeral_for ? `<button class="act" data-reply="${m.id}">回覆</button>` : ""}</div>
+        <div class="text">${render(shown)}</div>${btns}${intent}
+      </div></article>`;
+  }
+  log.innerHTML = html || `<div class="day">還沒有訊息。下面有範例句子可以點。</div>`;
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+const STATUS = { pending: "等待中", fired: "已響・未完成", done: "已完成", cancelled: "已取消", expired: "已過期" };
+function drawReminders() {
+  const rows = state.reminders.map(r => `<div class="item">
+    <div><span class="status ${r.status}">${STATUS[r.status] || r.status}</span> <b>#${r.id}</b> ${esc(r.text)}</div>
+    <div class="meta"><span>${esc(r.when)}</span>${r.repeat ? `<span>🔁 ${esc(r.repeat)}</span>` : ""}${r.kind === "timer" ? "<span>⏱️ 計時</span>" : ""}
+      ${r.parent ? `<span>第 #${r.parent} 的其中一次</span>` : ""}<span>${esc(r.creator)} → ${esc(r.targets.join("、"))}</span>${r.nags ? `<span>再提醒 ${r.nags} 次</span>` : ""}</div></div>`);
+  $("#remList").innerHTML = rows.join("") || "<p>還沒有提醒。</p>";
+}
+function drawNotes() {
+  $("#noteList").innerHTML = state.notes.map(n => `<div class="item"><div><b>#${n.id}</b> ${esc(n.text)}</div>
+    <div class="meta"><span>${esc(n.category)}</span><span>${esc(n.user)}</span></div></div>`).join("") || "<p>還沒有記事。</p>";
+}
+
+function drawSettings() {
+  const s = state.settings, form = $("#settingsForm");
+  form.innerHTML = info.groups.map(([title, keys]) => `<fieldset><legend>${esc(title)}</legend>${keys.map(k => {
+    const v = s[k], d = info.defaults[k], label = esc(info.labels[k] || k), hint = info.hints[k] ? `<div class="hint">可用：${esc(info.hints[k])}</div>` : "";
+    if (typeof d === "boolean") return `<label class="check"><input type="checkbox" id="set_${k}" name="${k}" ${v ? "checked" : ""}> ${label}</label>`;
+    if (k === "weather_county") return `<div class="field"><label for="set_${k}">${label}</label><select id="set_${k}" name="${k}">${info.counties.map(c => `<option ${c === v ? "selected" : ""}>${c}</option>`).join("")}</select></div>`;
+    if (k === "note_categories") return `<div class="field"><label for="set_${k}">${label}</label><textarea id="set_${k}" name="${k}">${esc(String(v))}</textarea></div>`;
+    const type = typeof d === "number" ? "number" : "text";
+    return `<div class="field"><label for="set_${k}">${label}</label><input type="${type}" id="set_${k}" name="${k}" value="${esc(String(v))}">${hint}</div>`;
+  }).join("")}</fieldset>`).join("");
+  form.dataset.ready = "1";
+}
+function readSettings() {
+  const out = {};
+  for (const el of $$("#settingsForm [name]")) {
+    if (el.type === "checkbox") { if (el.checked) out[el.name] = "on"; } else out[el.name] = el.value;
+  }
+  return JSON.stringify(out);
+}
+
+function drawFlags() {
+  const items = [...flags.entries()];
+  $("#flagList").innerHTML = items.map(([id, f]) => `<div class="flagitem"><div class="said">「${esc(f.said)}」</div>
+    <div class="got">bot 判斷：${esc(f.got)}</div>
+    <input data-expect="${id}" value="${esc(f.expect)}" placeholder="你原本的意思，例如：應該是明天晚上8點提醒"></div>`).join("") || "<p>還沒有標記任何句子。</p>";
+  updateReport();
+}
+function updateReport() {
+  const lines = [...flags.values()].map((f, i) => `${i + 1}. 「${f.said}」\n   bot 判斷：${f.got}\n   我的意思：${f.expect || "（還沒寫）"}`);
+  $("#reportText").value = lines.length ? `jvs 判斷錯誤回報（測試台時間 ${state.now_label}）\n\n${lines.join("\n")}` : "";
+}
+
+function setView(v) {
+  $("#main").dataset.view = v;
+  for (const b of $$("#tabs button, #sideTabs button")) b.classList.toggle("on", b.dataset.view === v);
+  const pane = v === "chat" ? ($("#sideTabs button.on") || {}).dataset?.view || "time" : v;
+  for (const p of $$(".pane")) p.hidden = p.dataset.pane !== pane;
+  if (v !== "chat") for (const b of $$("#sideTabs button")) b.classList.toggle("on", b.dataset.view === v);
+}
+
+function wire() {
+  $("#who").innerHTML = info.members.map(m => `<option value="${m.id}">${esc(m.name)}${m.roles.length ? "（樂團）" : ""}</option>`).join("");
+  $("#who").addEventListener("change", e => { me = +e.target.value; drawLog(); });
+  $("#examples").innerHTML = EXAMPLES.map(t => `<button type="button">${esc(t)}</button>`).join("");
+  $("#examples").addEventListener("click", e => { if (e.target.tagName === "BUTTON") { $("#input").value = e.target.textContent; $("#input").focus(); } });
+  $("#composer").addEventListener("submit", e => {
+    e.preventDefault();
+    const text = $("#input").value.trim();
+    if (!text) return;
+    call("say", me, text, replyTo);
+    $("#input").value = ""; replyTo = null; $("#replybar").hidden = true;
+    const log = $("#log"); log.scrollTop = log.scrollHeight;
+  });
+  $("#input").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#composer").requestSubmit(); } });
+  $("#replyCancel").addEventListener("click", () => { replyTo = null; $("#replybar").hidden = true; });
+  $("#log").addEventListener("click", e => {
+    const p = e.target.closest("[data-press]"), r = e.target.closest("[data-reply]"), f = e.target.closest("[data-flag]");
+    if (p) call("press", me, +p.dataset.mid, p.dataset.press);
+    if (r) {
+      replyTo = +r.dataset.reply;
+      const m = state.messages.find(x => x.id === replyTo);
+      $("#replyText").textContent = `回覆 jvs：${m.text.replace(/<@&?\d+>/g, "").replace(/\n/g, " ").slice(0, 40)}`;
+      $("#replybar").hidden = false; $("#input").focus();
+    }
+    if (f) {
+      const id = +f.dataset.flag, m = state.messages.find(x => x.id === id);
+      if (flags.has(id)) flags.delete(id);
+      else flags.set(id, { said: m.text.replace(/^<@1000>\s*/, "").replace(/<@(\d+)>/g, (_, i) => "@" + nameOf(i)), got: `${m.intent.label}｜${m.intent.detail}`, expect: "" });
+      drawLog(); drawFlags();
+    }
+  });
+  $("#flagList").addEventListener("input", e => { const id = +e.target.dataset.expect; if (flags.has(id)) { flags.get(id).expect = e.target.value; updateReport(); } });
+  $("#copyReport").addEventListener("click", async () => {
+    const t = $("#reportText");
+    try { await navigator.clipboard.writeText(t.value); $("#copyToast").textContent = "已複製，貼給 Claude 就可以了。"; }
+    catch { t.select(); $("#copyToast").textContent = "沒辦法自動複製，文字已選取，請手動複製。"; }
+  });
+  for (const b of $$("[data-adv]")) b.addEventListener("click", () => call("advance", +b.dataset.adv));
+  $("#jump").addEventListener("click", () => call("jump_next"));
+  $("#setTimeGo").addEventListener("click", () => { const v = $("#setTime").value; if (v) call("set_time", v); });
+  let armed = false;
+  $("#clearAll").addEventListener("click", e => {
+    if (!armed) { armed = true; e.target.textContent = "再按一次確定清空"; setTimeout(() => { armed = false; e.target.textContent = "清空對話和資料，重新開始"; }, 3000); return; }
+    armed = false; e.target.textContent = "清空對話和資料，重新開始"; flags.clear(); call("clear");
+  });
+  $("#saveSettings").addEventListener("click", () => { call("save_settings", readSettings()); $("#settingsToast").textContent = state.note; });
+  $("#resetSettings").addEventListener("click", () => { call("reset_settings"); $("#settingsForm").dataset.ready = ""; drawSettings(); $("#settingsToast").textContent = state.note; });
+  for (const b of $$("#tabs button, #sideTabs button")) b.addEventListener("click", () => setView(b.dataset.view));
+}
+
+async function boot() {
+  try {
+    const py = await loadPyodide({ indexURL: new URL("pyodide/", location.href).href });
+    $("#loadStep").textContent = "載入 jvs 程式…";
+    const src = JSON.parse($("#pysrc").textContent);
+    for (const [path, code] of Object.entries(src)) {
+      const dir = path.split("/").slice(0, -1).join("/");
+      if (dir) py.FS.mkdirTree("/home/pyodide/" + dir);
+      py.FS.writeFile("/home/pyodide/" + path, code);
+    }
+    py.runPython("import sys; sys.path.insert(0, '/home/pyodide')");
+    const SimCls = py.pyimport("simbridge").Sim;
+    sim = SimCls(Date.now());
+    info = JSON.parse(sim.info());
+    wire();
+    state = JSON.parse(sim.state());
+    // 示範：一開始先放兩句，讓畫面不是空的
+    call("say", 1, "明天下午3點提醒我交報告");
+    call("say", 1, "我想看 葬送的芙莉蓮");
+    $("#loading").hidden = true;
+  } catch (err) {
+    $("#loadErr").hidden = false;
+    $("#loadErr").textContent = "啟動失敗：" + (err && err.message || err) + "\n\n把這段文字貼給 Claude，我會換一種做法。";
+    document.querySelector(".loading .bar").hidden = true;
+  }
+}
+if (typeof loadPyodide === "function") boot();
+else { $("#loadErr").hidden = false; $("#loadErr").textContent = "載入 Python 執行環境失敗（pyodide.js 沒有載入）。把這段文字貼給 Claude。"; }
+</script>

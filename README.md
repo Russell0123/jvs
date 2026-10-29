@@ -45,6 +45,18 @@ Discord 裡沒有任何設定入口。網頁只聽 `127.0.0.1`，外面要連必
 ## 部署
 照 **[docs/SETUP.md](docs/SETUP.md)** 一步一步做：Discord bot → 氣象署 key → Oracle 免費 VM → 一鍵安裝 → Cloudflare 保護設定頁。
 
+## 測試台（不用連 Discord 就能試對話）
+`sim/` 是一個網頁版的模擬頻道，用 [Pyodide](https://pyodide.org/) 在瀏覽器裡直接跑 `reminderbot` 的 Python 程式碼，所以判斷邏輯跟正式 bot **完全是同一份**。
+- 可以切換成員（你／小明／小美）、@別人、按按鈕、回覆提醒
+- 每句話下面會顯示 bot 怎麼判斷；判斷錯的按「判斷錯了」，在「回報」寫下原意，一鍵複製
+- 「時間機器」可以快轉，看提醒什麼時候響、沒按完成會不會再提醒
+- 設定和正式設定網頁同一組欄位；天氣用假資料
+
+```bash
+python3 sim/build.py              # 產生 sim/dist/（第一次會下載 Pyodide，約 14MB）
+cd sim/dist && python3 -m http.server 8000   # 打開 http://localhost:8000
+```
+
 ## 本機開發
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
@@ -57,11 +69,13 @@ cp .env.example .env   # 填 DISCORD_TOKEN、CHANNEL_IDS
 |---|---|
 | `reminderbot/timeparse.py` | 中文時間解析、重複規則 |
 | `reminderbot/router.py` | 關鍵字判斷要做什麼、整理提醒內容 |
-| `reminderbot/bot.py` | Discord 事件、按鈕、排程 |
+| `reminderbot/core.py` | 核心邏輯：收訊息、按按鈕、時間到 → 要做的動作（不碰 Discord） |
+| `reminderbot/bot.py` | Discord 轉接層：把 Discord 事件交給 core、把動作送回 Discord |
 | `reminderbot/web.py` | 設定網頁 |
 | `reminderbot/settings.py` | 可調整的設定與預設值 |
 | `reminderbot/weather.py` | 中央氣象署 F-C0032-001 |
-| `reminderbot/db.py` | SQLite |
+| `reminderbot/store.py` | 資料存取（SQLite 正式用、記憶體版給測試台） |
+| `sim/` | 測試台網頁 |
 | `deploy/` | 安裝腳本、systemd 服務、每日備份 |
 
 想讓 bot 聽懂新說法：在 `tests/test_timeparse.py` 或 `tests/test_router.py` 加一個例子，再改對應的規則，直到測試通過。

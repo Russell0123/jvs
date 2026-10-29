@@ -1,113 +1,174 @@
-"""不連 Discord：用假頻道測提醒觸發、重複、延後、再提醒，以及設定網頁。"""
+"""core.Assistant 的完整流程（兩種 store 各跑一次，確保測試網頁和正式上線行為一致），以及設定網頁。"""
 import json
-import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from zoneinfo import ZoneInfo
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from reminderbot import weather
-from reminderbot.bot import ReminderBot
 from reminderbot.config import Config
+from reminderbot.core import Assistant, Edit, Incoming, NeedWeather, Send, User
+from reminderbot.store import MemoryStore, SqliteStore
 from reminderbot.web import make_app
 
-TZ = ZoneInfo("Asia/Taipei")
+TZ = timezone(timedelta(hours=8))
+T0 = datetime(2026, 10, 29, 14, 0, tzinfo=TZ)   # 週四下午兩點
+ME, MING = User(7, "我"), User(8, "小明", {50})
+CH = 1
 
 
-class FakeChannel:
-    def __init__(self):
-        self.sent = []
-
-    async def send(self, content=None, view=None, allowed_mentions=None):
-        msg = SimpleNamespace(id=1000 + len(self.sent), content=content, view=view)
-        self.sent.append(msg)
-        return msg
-
-    async def fetch_message(self, mid):
-        m = next(m for m in self.sent if m.id == mid)
-
-        async def edit(**kw):
-            m.view = kw.get("view", m.view)
-        m.edit = edit
-        return m
+@pytest.fixture(params=["memory", "sqlite"])
+def core(request, tmp_path):
+    store = MemoryStore() if request.param == "memory" else SqliteStore(str(tmp_path / "t.db"))
+    return Assistant(store, TZ)
 
 
-@pytest.fixture
-async def bot(tmp_path, monkeypatch):
-    cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path=str(tmp_path / "t.db"),
-                 tz=TZ, web_host="127.0.0.1", web_port=0, admin_email="me@example.com", web_password="")
-    b = ReminderBot(cfg)
-    await b.db.open()
-    ch = FakeChannel()
+class Chat:
+    """模擬頻道：送出的訊息都給編號，方便延後、再提醒時找回來。"""
 
-    async def _channel(cid):
-        return ch
-    monkeypatch.setattr(b, "_channel", _channel)
-    b.fake = ch
-    yield b
-    await b.db.close()
+    def __init__(self, core):
+        self.core, self.msgs, self.next_id = core, {}, 100
 
+    def run(self, actions):
+        out = []
+        for a in actions:
+            if isinstance(a, Send):
+                self.next_id += 1
+                self.msgs[self.next_id] = a
+                if a.reminder_id:
+                    self.core.sent(a.reminder_id, self.next_id)
+                out.append((self.next_id, a))
+            elif isinstance(a, Edit):
+                if a.clear_buttons:
+                    self.msgs[a.message_id].buttons = []
+            elif isinstance(a, NeedWeather):
+                out.append((None, a))
+        return out
 
-async def test_one_off_fire_and_nag(bot):
-    rid = await bot.db.add_reminder(channel_id=1, creator_id=7, targets=["u:7", "u:8"], text="交報告",
-                                    due_at=int(time.time()) - 1)
-    await bot.fire_due()
-    assert len(bot.fake.sent) == 1
-    assert "<@7> <@8> 交報告" in bot.fake.sent[0].content
-    assert (await bot.db.get_reminder(rid))["status"] == "fired"
+    def say(self, user, text, now=T0, mentions=(), roles=(), reply_to=None):
+        return self.run(self.core.handle(Incoming(user, text, CH, 1, list(mentions), list(roles), reply_to), now))
 
-    # 時間往回撥，讓它符合再提醒條件
-    await bot.db.update_reminder(rid, fired_at=int(time.time()) - 31 * 60)
-    await bot.nag()
-    assert len(bot.fake.sent) == 2 and "第 2 次" in bot.fake.sent[1].content
-    assert bot.fake.sent[0].view is None          # 舊訊息按鈕拿掉
-    assert (await bot.db.get_reminder(rid))["nag_count"] == 1
+    def tick(self, now):
+        return self.run(self.core.tick(now, CH))
 
 
-async def test_repeat_spawns_occurrence(bot):
-    due = datetime.now(TZ) - timedelta(seconds=5)
-    rid = await bot.db.add_reminder(channel_id=1, creator_id=7, targets=["u:7"], text="吃藥",
-                                    due_at=int(due.timestamp()), repeat="daily")
-    await bot.fire_due()
-    parent = await bot.db.get_reminder(rid)
+def test_reminder_flow_with_nag(core):
+    chat = Chat(core)
+    [(_, confirm)] = chat.say(ME, "10分鐘後提醒我關火")
+    assert confirm.text.startswith("✅ 已設定 #1") and "關火" in confirm.text
+    assert chat.tick(T0 + timedelta(minutes=5)) == []
+
+    [(mid, fired)] = chat.tick(T0 + timedelta(minutes=10))
+    assert fired.ping and fired.text == "⏰ <@7> 關火"
+    assert [b.label for b in fired.buttons] == ["完成", "10 分鐘後", "1 小時後", "明天"]
+
+    [(_, nag)] = chat.tick(T0 + timedelta(minutes=41))
+    assert "第 2 次" in nag.text and chat.msgs[mid].buttons == []
+    chat.tick(T0 + timedelta(minutes=72))
+    assert chat.tick(T0 + timedelta(minutes=200)) == []          # 最多再提醒 2 次
+
+    res = core.press("rem:done:1", ME, T0 + timedelta(minutes=201))
+    assert "已完成" in res.append and core.store.get_reminder(1)["status"] == "done"
+
+
+def test_snooze_button_and_reply(core):
+    chat = Chat(core)
+    chat.say(ME, "下午3點提醒我開會")
+    chat.tick(T0 + timedelta(hours=1))
+    assert core.press("rem:snooze:1:10", MING, T0 + timedelta(hours=1)).ephemeral   # 別人不能按
+    res = core.press("rem:snooze:1:10", ME, T0 + timedelta(hours=1))
+    assert "15:10" in res.append
+    [(mid, _)] = chat.tick(T0 + timedelta(minutes=70))
+    out = chat.say(ME, "延後 30 分鐘", now=T0 + timedelta(minutes=71), reply_to=mid)
+    assert "15:41" in out[0][1].text
+    assert core.store.get_reminder(1)["status"] == "pending"
+
+
+def test_repeat_and_cancel(core):
+    chat = Chat(core)
+    chat.say(ME, "每天下午3點提醒我喝水")
+    for day in range(3):
+        sent = chat.tick(T0 + timedelta(days=day, hours=1))
+        assert len(sent) == 1 and "喝水" in sent[0][1].text
+        if day:
+            assert core.store.get_reminder(2 + day - 1)["status"] == "expired"   # 前一次過期、按鈕拿掉
+            assert chat.msgs[sent[0][0] - 1].buttons == []
+    parent = core.store.get_reminder(1)
     assert parent["status"] == "pending"
-    assert parent["due_at"] == int((due + timedelta(days=1)).timestamp())
-    occ = await bot.db.reminder_by_message(bot.fake.sent[0].id)
-    assert occ["parent_id"] == rid and occ["status"] == "fired"
+    assert parent["due_at"] == int((T0 + timedelta(days=3, hours=1)).timestamp())
+    chat.say(ME, "取消 1")
+    sent = chat.tick(T0 + timedelta(days=3, hours=1))
+    assert not any("喝水" in a.text and "次提醒" not in a.text for _, a in sent)
 
 
-async def test_snooze(bot):
-    rid = await bot.db.add_reminder(channel_id=1, creator_id=7, targets=["u:7"], text="x",
-                                    due_at=int(time.time()) - 1)
-    await bot.fire_due()
-    rem = await bot.db.get_reminder(rid)
-    new_due = await bot._snooze_update(rem, "10")
-    rem = await bot.db.get_reminder(rid)
-    assert rem["status"] == "pending" and abs(rem["due_at"] - (time.time() + 600)) < 5
-    assert new_due > datetime.now(TZ)
+def test_mention_others_and_roles(core):
+    chat = Chat(core)
+    [(_, c)] = chat.say(ME, "明天中午提醒 <@8> 開會", mentions=[8])
+    assert "→ 提醒 <@8>" in c.text and c.text.endswith("<@8>") and not c.ping
+    [(_, c)] = chat.say(ME, "明天中午提醒 <@&50> 練團", roles=[50])
+    assert "<@&50>" in c.text
+    assert len(core.store.user_reminders(8)) == 1                     # 小明查得到給他的提醒
+    assert core.press("rem:cancel:2", MING, T0).ephemeral is None      # 身分組成員可以取消
 
 
-async def test_user_lists(bot):
-    await bot.db.add_reminder(channel_id=1, creator_id=7, targets=["u:9"], text="給別人", due_at=int(time.time()) + 99)
-    await bot.db.add_note(7, "想看", "芙莉蓮")
-    assert len(await bot.db.user_reminders(9)) == 1      # 被提醒的人看得到
-    assert len(await bot.db.user_reminders(8)) == 0
-    text = await bot.list_text(7, "all", None)
-    assert "給別人" in text and "芙莉蓮" in text
+def test_timer_notes_lists(core):
+    chat = Chat(core)
+    [(_, c)] = chat.say(ME, "計時 25 分鐘")
+    assert "開始計時 25 分鐘" in c.text
+    [(_, f)] = chat.tick(T0 + timedelta(minutes=25))
+    assert f.text.startswith("⏱️ <@7> 計時 25 分鐘 到了")
+    assert chat.tick(T0 + timedelta(hours=2)) == []                    # 計時器不會再提醒
+
+    chat.say(ME, "我想看 葬送的芙莉蓮")
+    chat.say(ME, "記住 靈感：會唱歌的貓")
+    chat.say(MING, "我想看 孤獨搖滾")
+    [(_, lst)] = chat.say(ME, "我想看什麼")
+    assert "芙莉蓮" in lst.text and "孤獨搖滾" not in lst.text
+    [(_, lst)] = chat.say(ME, "刪除靈感 2")
+    assert "已刪除" in lst.text
+
+
+def test_weather_intent_and_daily(core):
+    chat = Chat(core)
+    [(_, w)] = chat.say(ME, "台中天氣")
+    assert isinstance(w, NeedWeather) and w.county == "臺中市"
+    morning = datetime(2026, 10, 30, 7, 31, tzinfo=TZ)
+    [(_, w)] = chat.tick(morning)
+    assert isinstance(w, NeedWeather) and w.channel_id == CH
+    assert chat.tick(morning + timedelta(minutes=1)) == []            # 一天只貼一次
+
+
+def test_settings_change_behavior(core):
+    core.store.save_settings({"reminder_template": "🔔 {mentions} 記得 {text}", "snooze_minutes": "5",
+                              "snooze_tomorrow": False, "feature_timer": False})
+    chat = Chat(core)
+    chat.say(ME, "10分鐘後提醒我關火")
+    [(_, f)] = chat.tick(T0 + timedelta(minutes=10))
+    assert f.text == "🔔 <@7> 記得 關火" and [b.label for b in f.buttons] == ["完成", "5 分鐘後"]
+    assert "關閉" in chat.say(ME, "計時 5 分鐘")[0][1].text
 
 
 def test_weather_parse():
     data = json.loads(Path(__file__).with_name("fixtures_weather.json").read_text())
     periods = weather.parse(data, "臺北市", TZ)
     assert periods[0].pop == 60 and periods[0].max_t == 26
-    report = weather.format_report("臺北市", periods, 50)
-    assert "帶傘" in report and "多雲短暫陣雨" in report
+    report = weather.format_report("臺北市", periods, 50, T0)
+    assert "今天白天" in report and "帶傘" in report and "多雲短暫陣雨" in report
 
 
-async def test_web_auth_and_settings(bot):
+async def test_web_auth_and_settings(tmp_path):
+    cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path="", tz=TZ, web_host="127.0.0.1",
+                 web_port=0, admin_email="me@example.com", web_password="")
+
+    async def fetch_user(i):
+        raise LookupError
+
+    async def post_weather_now():
+        return None
+    bot = SimpleNamespace(config=cfg, tz=TZ, store=SqliteStore(str(tmp_path / "w.db")),
+                          get_user=lambda i: None, fetch_user=fetch_user, post_weather_now=post_weather_now)
     client = TestClient(TestServer(make_app(bot)))
     await client.start_server()
     try:
@@ -116,11 +177,11 @@ async def test_web_auth_and_settings(bot):
         resp = await client.get("/", headers=h)
         assert resp.status == 200 and "訊息格式" in await resp.text()
 
-        form = {k: v for k, v in (await bot.db.settings()).items() if not isinstance(v, bool)}
+        form = {k: v for k, v in bot.store.settings().items() if not isinstance(v, bool)}
         form.update(reminder_template="🔔 {mentions} 記得 {text}", weather_daily_time="6:45", feature_reminder="on")
         resp = await client.post("/settings", data=form, headers=h, allow_redirects=False)
         assert resp.status == 303
-        s = await bot.db.settings()
+        s = bot.store.settings()
         assert s["reminder_template"] == "🔔 {mentions} 記得 {text}"
         assert s["weather_daily_time"] == "06:45"
         assert s["feature_reminder"] is True and s["feature_timer"] is False   # 沒勾 = 關
@@ -130,5 +191,6 @@ async def test_web_auth_and_settings(bot):
         assert resp.status == 403
         assert (await client.get("/reminders", headers=h)).status == 200
         assert (await client.get("/notes", headers=h)).status == 200
+        assert (await client.post("/weather/test", headers=h, allow_redirects=False)).status == 303
     finally:
         await client.close()

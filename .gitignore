@@ -5,3 +5,5 @@ __pycache__/
 data/*.db*
 data/backups/
 .pytest_cache/
+sim/dist/
+sim/.pyodide-cache/

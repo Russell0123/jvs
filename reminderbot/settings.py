@@ -46,6 +46,36 @@ DEFAULTS: dict = {
                        "備忘：",
 }
 
+# 設定網頁、測試網頁共用的欄位名稱
+LABELS = {
+    "feature_reminder": "提醒", "feature_note": "記住（靈感／想看／備忘）", "feature_timer": "計時器",
+    "feature_weather": "天氣", "feature_mention_others": "可以提醒別人（@其他成員）",
+    "confirm_template": "設定成功的回覆", "reminder_template": "提醒時間到的訊息",
+    "nag_template": "再次提醒的訊息", "timer_template": "計時到的訊息", "note_saved_template": "記事存好的回覆",
+    "date_only_time": "只講日期時用幾點", "time_morning": "「早上」= 幾點（也是延後到明天的時間）",
+    "time_noon": "「中午」", "time_afternoon": "「下午」", "time_evening": "「傍晚」", "time_night": "「晚上」",
+    "snooze_minutes": "延後按鈕（分鐘，逗號分隔）", "snooze_tomorrow": "有「明天」延後按鈕",
+    "nag_enabled": "沒按完成會再提醒", "nag_interval_minutes": "再提醒間隔（分鐘）", "nag_max": "最多再提醒幾次",
+    "weather_daily_enabled": "每天自動貼天氣", "weather_daily_time": "每天幾點貼", "weather_county": "縣市",
+    "weather_rain_threshold": "降雨機率超過幾 % 提醒帶傘",
+    "note_categories": "記事分類（一行一類：「分類：關鍵字,關鍵字」，最後一行是沒對到時的預設分類）",
+}
+HINTS = {
+    "confirm_template": "{id} {time} {repeat} {text} {targets}",
+    "reminder_template": "{mentions} {text} {time} {creator} {repeat}",
+    "nag_template": "{mentions} {text} {count}",
+    "timer_template": "{mentions} {duration} {text}",
+    "note_saved_template": "{id} {category} {text}",
+}
+GROUPS = [
+    ("功能開關", ["feature_reminder", "feature_note", "feature_timer", "feature_weather", "feature_mention_others"]),
+    ("訊息格式", ["confirm_template", "reminder_template", "nag_template", "timer_template", "note_saved_template"]),
+    ("時間", ["date_only_time", "time_morning", "time_noon", "time_afternoon", "time_evening", "time_night"]),
+    ("延後與再提醒", ["snooze_minutes", "snooze_tomorrow", "nag_enabled", "nag_interval_minutes", "nag_max"]),
+    ("天氣", ["weather_daily_enabled", "weather_daily_time", "weather_county", "weather_rain_threshold"]),
+    ("記事", ["note_categories"]),
+]
+
 BOOL_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, bool)]
 INT_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, int) and not isinstance(v, bool)]
 TIME_KEYS = ["date_only_time", "time_morning", "time_noon", "time_afternoon",

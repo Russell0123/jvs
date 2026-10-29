@@ -11,39 +11,11 @@ from urllib.parse import urlparse
 from aiohttp import web
 
 from . import timeparse
-from .settings import COUNTIES, DEFAULTS, validate
+from .settings import COUNTIES, DEFAULTS, GROUPS, HINTS, LABELS, validate
 
 log = logging.getLogger(__name__)
 
-LABELS = {
-    "feature_reminder": "提醒", "feature_note": "記住（靈感／想看／備忘）", "feature_timer": "計時器",
-    "feature_weather": "天氣", "feature_mention_others": "可以提醒別人（@其他成員）",
-    "confirm_template": "設定成功的回覆", "reminder_template": "提醒時間到的訊息",
-    "nag_template": "再次提醒的訊息", "timer_template": "計時到的訊息", "note_saved_template": "記事存好的回覆",
-    "date_only_time": "只講日期時用幾點", "time_morning": "「早上」= 幾點（也是延後到明天的時間）",
-    "time_noon": "「中午」", "time_afternoon": "「下午」", "time_evening": "「傍晚」", "time_night": "「晚上」",
-    "snooze_minutes": "延後按鈕（分鐘，逗號分隔）", "snooze_tomorrow": "有「明天」延後按鈕",
-    "nag_enabled": "沒按完成會再提醒", "nag_interval_minutes": "再提醒間隔（分鐘）", "nag_max": "最多再提醒幾次",
-    "weather_daily_enabled": "每天自動貼天氣", "weather_daily_time": "每天幾點貼", "weather_county": "縣市",
-    "weather_rain_threshold": "降雨機率超過幾 % 提醒帶傘",
-    "note_categories": "記事分類（一行一類：「分類：關鍵字,關鍵字」，最後一行是沒對到時的預設分類）",
-}
-HINTS = {
-    "confirm_template": "{id} {time} {repeat} {text} {targets}",
-    "reminder_template": "{mentions} {text} {time} {creator} {repeat}",
-    "nag_template": "{mentions} {text} {count}",
-    "timer_template": "{mentions} {duration} {text}",
-    "note_saved_template": "{id} {category} {text}",
-}
-GROUPS = [
-    ("功能開關", ["feature_reminder", "feature_note", "feature_timer", "feature_weather", "feature_mention_others"]),
-    ("訊息格式", ["confirm_template", "reminder_template", "nag_template", "timer_template", "note_saved_template"]),
-    ("時間", ["date_only_time", "time_morning", "time_noon", "time_afternoon", "time_evening", "time_night"]),
-    ("延後與再提醒", ["snooze_minutes", "snooze_tomorrow", "nag_enabled", "nag_interval_minutes", "nag_max"]),
-    ("天氣", ["weather_daily_enabled", "weather_daily_time", "weather_county", "weather_rain_threshold"]),
-    ("記事", ["note_categories"]),
-]
-STATUS = {"pending": "等待中", "fired": "已響・未完成", "done": "已完成", "cancelled": "已取消"}
+STATUS = {"pending": "等待中", "fired": "已響・未完成", "done": "已完成", "cancelled": "已取消", "expired": "已過期"}
 
 CSS = """
 :root{--bg:#f6f7f9;--card:#fff;--fg:#1d2330;--muted:#6b7280;--line:#e3e6eb;--accent:#5865f2;--danger:#d14343}
@@ -120,36 +92,36 @@ def make_app(bot) -> web.Application:
         return out
 
     async def settings_page(request: web.Request):
-        s = await bot.db.settings()
+        s = bot.store.settings()
         msg = {"saved": "✅ 已儲存，馬上生效。", "weather": "✅ 已把天氣貼到頻道。"}.get(request.query.get("ok", ""), "")
         return page("助理設定", "settings", render_settings(s), msg)
 
     async def settings_save(request: web.Request):
         form = await request.post()
         values, errors = validate(dict(form))
-        await bot.db.save_settings(values)
+        bot.store.save_settings(values)
         if errors:
-            return page("助理設定", "settings", render_settings(await bot.db.settings()),
+            return page("助理設定", "settings", render_settings(bot.store.settings()),
                         "部分欄位沒存：" + escape("；".join(errors)), error=True)
         raise web.HTTPSeeOther("/?ok=saved")
 
     async def settings_reset(request: web.Request):
-        await bot.db.save_settings(DEFAULTS)
+        bot.store.save_settings(DEFAULTS)
         raise web.HTTPSeeOther("/?ok=saved")
 
     async def weather_test(request: web.Request):
         try:
-            await bot.daily_weather(force=True)
+            await bot.post_weather_now()
         except Exception as e:
-            return page("助理設定", "settings", render_settings(await bot.db.settings()),
+            return page("助理設定", "settings", render_settings(bot.store.settings()),
                         "天氣發送失敗：" + escape(str(e)), error=True)
         raise web.HTTPSeeOther("/?ok=weather")
 
     async def reminders_page(request: web.Request):
         f = request.query.get("f", "active")
-        statuses = {"active": ("pending", "fired"), "done": ("done", "cancelled"),
-                    "all": ("pending", "fired", "done", "cancelled")}.get(f, ("pending", "fired"))
-        rems = await bot.db.all_reminders(statuses)
+        statuses = {"active": ("pending", "fired"), "done": ("done", "cancelled", "expired"),
+                    "all": ("pending", "fired", "done", "cancelled", "expired")}.get(f, ("pending", "fired"))
+        rems = bot.store.all_reminders(statuses)
         who = await names([r["creator_id"] for r in rems] +
                           [int(t[2:]) for r in rems for t in r["targets"] if t.startswith("u:")])
         rows = []
@@ -173,11 +145,11 @@ def make_app(bot) -> web.Application:
         return page("提醒", "reminders", body)
 
     async def reminder_cancel(request: web.Request):
-        await bot.db.update_reminder(int(request.match_info["id"]), status="cancelled")
+        bot.store.update_reminder(int(request.match_info["id"]), status="cancelled")
         raise web.HTTPSeeOther("/reminders")
 
     async def notes_page(request: web.Request):
-        notes = await bot.db.all_notes()
+        notes = bot.store.all_notes()
         who = await names([n["user_id"] for n in notes])
         rows = "".join(
             f"<tr><td>#{n['id']}</td><td>{escape(n['category'])}</td><td>{escape(n['text'])}</td>"
@@ -191,7 +163,7 @@ def make_app(bot) -> web.Application:
         return page("記事", "notes", body)
 
     async def note_delete(request: web.Request):
-        await bot.db.delete_note(int(request.match_info["id"]))
+        bot.store.delete_note(int(request.match_info["id"]))
         raise web.HTTPSeeOther("/notes")
 
     async def health(request: web.Request):

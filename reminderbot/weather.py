@@ -4,8 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-import aiohttp
-
 API = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001"
 
 
@@ -19,9 +17,8 @@ class Period:
     max_t: int
     ci: str          # 舒適度
 
-    @property
-    def label(self) -> str:
-        diff = (self.start.date() - datetime.now(self.start.tzinfo).date()).days
+    def label(self, now: datetime) -> str:
+        diff = (self.start.date() - now.astimezone(self.start.tzinfo).date()).days
         day = {0: "今天", 1: "明天", 2: "後天"}.get(diff, f"{self.start:%m/%d}")
         h = self.start.hour
         return f"{day}{'白天' if 6 <= h < 18 else '晚上' if h >= 18 else '凌晨'}"
@@ -32,6 +29,7 @@ class WeatherError(Exception):
 
 
 async def fetch(api_key: str, county: str, tz) -> list[Period]:
+    import aiohttp  # 測試網頁（瀏覽器）沒有 aiohttp，所以用到才載入
     if not api_key:
         raise WeatherError("還沒設定中央氣象署的 API key（CWA_API_KEY）")
     params = {"Authorization": api_key, "locationName": county, "format": "JSON"}
@@ -75,10 +73,10 @@ def _dt(s: str, tz) -> datetime:
     return datetime.fromisoformat(s.replace(" ", "T")).replace(tzinfo=None).replace(tzinfo=tz)
 
 
-def format_report(county: str, periods: list[Period], rain_threshold: int) -> str:
+def format_report(county: str, periods: list[Period], rain_threshold: int, now: datetime) -> str:
     lines = [f"🌤️ **{county} 天氣**"]
     for p in periods[:3]:
-        lines.append(f"・{p.label}（{p.start:%H}–{p.end:%H} 時）：{p.wx}，"
+        lines.append(f"・{p.label(now)}（{p.start:%H}–{p.end:%H} 時）：{p.wx}，"
                      f"{p.min_t}–{p.max_t}°C，降雨機率 {p.pop}%，{p.ci}")
     first = periods[0]
     if max(p.pop for p in periods[:2]) >= rain_threshold:
