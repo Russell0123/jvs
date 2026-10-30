@@ -573,11 +573,13 @@ def make_app(bots) -> web.Application:
         for filename, data in sorted(files, key=lambda f: [int(x) if x.isdigit() else x
                                                           for x in re.split(r"(\d+)", f[0])]):
             try:
-                added.append(images.save(img_root(), group, data))
+                if group == "pics":             # 雪豹圖庫：同一張圖不重複收
+                    added.append(images.add_unique(bot.core, img_root(), group, data))
+                else:
+                    added.append(images.save(img_root(), group, data))
+                    bot.core.set_images(group, bot.core.images(group) + added[-1:])
             except ValueError as e:
                 errors.append(f"{filename}：{e}")
-        if added:
-            bot.core.set_images(group, bot.core.images(group) + added)
         if errors:
             raise web.HTTPSeeOther(back_to(request, group, urlencode({"err": "沒存到 " + "；".join(errors)})))
         raise web.HTTPSeeOther(back_to(request, group, f"ok={len(added)}"))
@@ -894,7 +896,7 @@ FOLDER_JS = """<script>
       } catch (e) { bad++; }
       done++; msg.textContent = `上傳中 ${done}/${files.length}` + (bad ? `，${bad} 張沒成功` : "");
     }
-    msg.textContent = `上傳完成 ${done - bad} 張` + (bad ? `，${bad} 張沒成功（超過 8MB 或不是圖）` : "");
+    msg.textContent = `上傳完成 ${done - bad} 張` + (bad ? `，${bad} 張沒加（圖庫已經有了、超過 8MB 或不是圖）` : "");
     setTimeout(() => location.reload(), 1000);
   }
   for (const id of ["folderpick", "filepick"]) {

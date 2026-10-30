@@ -121,7 +121,7 @@ token 錯了只會讓蔣寶不跑，賈維斯照常；紀錄裡會寫「蔣寶 �
 
 步驟跟蔣寶一樣，只是名字填「雪豹」、`.env` 加的是 `SNOW_DISCORD_TOKEN=`（想限定頻道再加 `SNOW_CHANNEL_IDS=`）。雪豹不用改暱稱，邀請網址用這個（`CLIENT_ID` 換成雪豹的）：
 ```
-https://discord.com/oauth2/authorize?client_id=CLIENT_ID&scope=bot&permissions=117760
+https://discord.com/oauth2/authorize?client_id=CLIENT_ID&scope=bot+applications.commands&permissions=117760
 ```
 重啟後設定網頁最左邊多一個「雪」：到「預設回覆」按「📁 選資料夾上傳」選整個資料夾（會一張一張傳，看得到進度，不是圖的檔案會跳過）。
 

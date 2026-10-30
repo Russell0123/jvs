@@ -67,6 +67,7 @@ DEFAULTS: dict = {
     "kaomoji_phrases": "(=^･ω･^=)\n(=①ω①=)\n(^・ω・^ )\nฅ^•ﻌ•^ฅ\n(=ↀωↀ=)\n(ﾐゝᆺ・ﾐ)\n/ᐠ｡ꞈ｡ᐟ\\\n(=´ᆺ`=)\n"
                        "ฅ(´・ω・`)ฅ\n(ΦωΦ)\n(=ＴェＴ=)\n(^・x・^)\n(=｀ω´=)\n/ᐠ - ˕ -マ\n(=^ ◡ ^=)",
     "stock_phrases": "雪豹庫存不夠了",
+    "gallery_anyone": True,          # 右鍵選單「加到圖庫」：大家都能加（關掉就只有主人）
     "yesno_phrases": "要\n要啊\n當然要\n再考慮看看\n先不要\n不要好了",
     "greet_phrases": "嘿\n提到我嗎？\n？\n您好\n咪嗚\n{時段}，{名字}\n{時段}～外面{天氣}",
     "greet_rare_phrases": "史塔克的肛門",
@@ -169,6 +170,7 @@ LABELS = {
     "yesno_phrases": "問要不要的回答",
     "kaomoji_phrases": "每張圖附的貓咪顏文字，一行一個隨機挑",
     "stock_phrases": "圖庫整輪都發過一次時，賈維斯在它的提醒頻道跟主人講的話",
+    "gallery_anyone": "大家都能用右鍵選單把圖加進圖庫（關掉就只有主人）",
     "handoff_phrases": "被叫去做賈維斯會的事時回的話，後面會自動 @賈維斯，然後賈維斯接手。可以用 {任務}，例如「提醒」「天氣」",
     "echo_mode": "應聲之後",
     "listen_bots": "另一個 bot 講的話也會觸發（只接一層，不會互相接龍）",
@@ -269,7 +271,7 @@ REACTION_KEYS = ["auto_reactions"]
 RELAY_SETTING_GROUPS = [("功能", ["respond", "all_channels", "listen_bots", "self_loop"]),
                         ("叫它", ["bot_names", "greet_words", "greet_rare_percent", "greet_image_percent", "task_words"]),
                         ("改暱稱", ["nick_rules"]), ("應聲蟲", ["echo_enabled", "echo_mode"])]
-GALLERY_SETTING_GROUPS = [("功能", ["respond", "all_channels"])]
+GALLERY_SETTING_GROUPS = [("功能", ["respond", "all_channels", "gallery_anyone"])]
 GALLERY_REPLY_GROUPS = [("顏文字", ["kaomoji_phrases"]), ("圖庫整輪發完", ["stock_phrases"])]
 RELAY_REPLY_GROUPS = [("轉給賈維斯", ["handoff_phrases"]), ("打招呼", ["greet_phrases", "greet_rare_phrases"])]
 NICK_GROUP = ("改暱稱", ["nick_rules"])

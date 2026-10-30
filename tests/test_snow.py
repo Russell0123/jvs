@@ -16,7 +16,21 @@ from reminderbot.web import make_app
 TZ = timezone(timedelta(hours=8))
 NOW = datetime(2026, 10, 30, 12, 0, tzinfo=TZ)
 ME = User(7, "我")
-PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+def pic(seed, size=(160, 120), fmt="PNG", **kw):
+    """畫一張每個 seed 都不一樣的圖。"""
+    import io
+    import random
+
+    from PIL import Image, ImageDraw
+    r = random.Random(seed)
+    im = Image.new("RGB", size, (200, 220, 240))
+    d = ImageDraw.Draw(im)
+    for _ in range(25):
+        x, y = r.randint(0, size[0]), r.randint(0, size[1])
+        d.ellipse([x, y, x + r.randint(10, 60), y + r.randint(10, 60)], fill=tuple(r.randint(0, 255) for _ in range(3)))
+    b = io.BytesIO()
+    im.save(b, fmt, **kw)
+    return b.getvalue()
 
 
 def snow(n=0):
@@ -101,13 +115,17 @@ async def test_snow_web(tmp_path):
         html = await (await client.get("/b/snow/replies")).text()
         assert "folderpick" in html and "webkitdirectory" in html and "name='kaomoji_phrases'" in html
         assert "/b/snow/rules" not in html and "Stark says" not in html
-        for name in ["2.png", "10.png", "1.png"]:                     # 一張一張送（資料夾上傳也是這樣）
+        for i, name in enumerate(["2.png", "10.png", "1.png"]):       # 一張一張送（資料夾上傳也是這樣）
             form = FormData()
-            form.add_field("files", PNG, filename=name, content_type="image/png")
+            form.add_field("files", pic(i), filename=name, content_type="image/png")
             r = await client.post("/b/snow/images/pics/upload", data=form)
             assert r.status == 200
         assert len(snowbot.core.images("pics")) == 3 and (tmp_path / "images-snow" / "pics").is_dir()
         assert "共 3 張" in await (await client.get("/b/snow/replies")).text()
+        form = FormData()                                              # 同一張轉成 jpg 再傳：認得出來
+        form.add_field("files", pic(0, fmt="JPEG", quality=70), filename="again.jpg", content_type="image/jpeg")
+        r = await client.post("/b/snow/images/pics/upload", data=form)
+        assert "err=" in str(r.url) and len(snowbot.core.images("pics")) == 3
         snowbot.core.next_pic(__import__("random").Random(1))
         await client.post("/b/snow/images/pics/reshuffle")
         assert snowbot.store.get_meta("pic_bag")["left"] == []
@@ -129,3 +147,65 @@ async def test_peer_say_goes_to_jarvis_home_channel():
     await ReminderBot.say_home(jvs, "雪豹庫存不夠了")
     [a] = sent
     assert a.channel_id == 42 and a.text == "<@7> 雪豹庫存不夠了" and a.ping and a.reply_to is None
+
+
+def test_fingerprint_dedupe(tmp_path):
+    from reminderbot import images
+    core, store = snow(0)
+    root = tmp_path / "images-snow"
+    images.add_unique(core, root, "pics", pic(1))
+    import io
+
+    from PIL import Image
+    small = io.BytesIO()
+    Image.open(io.BytesIO(pic(1))).resize((80, 60)).save(small, "WEBP")      # 縮小一半、換成 webp
+    for dup in (pic(1, fmt="JPEG", quality=60), small.getvalue(), pic(1)):
+        try:
+            images.add_unique(core, root, "pics", dup)
+            raise AssertionError("應該認得是同一張")
+        except ValueError as e:
+            assert str(e) == "已經有了"
+    images.add_unique(core, root, "pics", pic(2))
+    assert len(core.images("pics")) == 2
+    # 以前上傳、沒有指紋的圖：比對時補算
+    (root / "pics" / "old.png").write_bytes(pic(3))
+    core.set_images("pics", core.images("pics") + ["old.png"])
+    try:
+        images.add_unique(core, root, "pics", pic(3, fmt="JPEG"))
+        raise AssertionError
+    except ValueError:
+        pass
+
+
+async def test_context_menu_add(tmp_path):
+    from reminderbot.bot import ReminderBot
+    core, store = snow(0)
+    replies = []
+
+    class Att:
+        def __init__(self, data, name="a.png", ctype="image/png"):
+            self.data, self.filename, self.content_type, self.size = data, name, ctype, len(data)
+
+        async def read(self):
+            return self.data
+
+    async def respond(text=None, **kw):
+        replies.append(text)
+
+    async def defer(**kw):
+        pass
+    inter = SimpleNamespace(user=SimpleNamespace(id=8), response=SimpleNamespace(send_message=respond, defer=defer),
+                            followup=SimpleNamespace(send=respond))
+    me = SimpleNamespace(core=core, store=store, config=SimpleNamespace(owner_id=7, db_path=str(tmp_path / "snow.db"),
+                                                                       name="雪豹"))
+    msg = SimpleNamespace(attachments=[Att(pic(1)), Att(pic(2), "b.jpg", "image/jpeg"), Att(b"txt", "x.txt", "text/plain")],
+                          embeds=[])
+    await ReminderBot._add_to_gallery(me, inter, msg)                     # 預設大家都能加
+    assert replies[-1] == "加進雪豹圖庫 2 張，現在共 2 張。" and len(core.images("pics")) == 2
+    await ReminderBot._add_to_gallery(me, inter, SimpleNamespace(attachments=[Att(pic(1))], embeds=[]))
+    assert "已經在圖庫裡" in replies[-1]
+    await ReminderBot._add_to_gallery(me, inter, SimpleNamespace(attachments=[], embeds=[]))
+    assert replies[-1] == "這則訊息裡沒有圖。"
+    store.save_settings({"gallery_anyone": False})
+    await ReminderBot._add_to_gallery(me, inter, msg)
+    assert replies[-1] == "只有主人可以加圖。"

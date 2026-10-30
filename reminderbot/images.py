@@ -1,6 +1,8 @@
 """打招呼用的圖庫：圖片檔放在資料庫旁邊的 images/分組/ 資料夾，清單記在 store 的 meta。"""
 from __future__ import annotations
 
+import hashlib
+import io
 import re
 import secrets
 import time
@@ -79,3 +81,47 @@ def delete_group(root: Path, group: str):
         for p in (root / group).iterdir():
             p.unlink()
         (root / group).rmdir()
+
+
+def fingerprint(data: bytes) -> list | str:
+    """圖片指紋：縮成 9×8 灰階比相鄰亮暗（dHash，64 位元）＋整張的平均顏色。
+    轉存、縮放、壓縮、換格式的同一張圖指紋幾乎一樣。解不開的圖退回用內容雜湊（只認得一模一樣的檔案）。"""
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as im:
+            im.seek(0)
+            rgb = im.convert("RGB")
+            gray = rgb.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
+            px = [gray.getpixel((x, y)) for y in range(8) for x in range(9)]      # 各版 Pillow 都能用
+            bits = 0
+            for y in range(8):
+                for x in range(8):
+                    bits = (bits << 1) | (px[y * 9 + x] > px[y * 9 + x + 1])
+            r, g, b = rgb.resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
+            return [bits, r, g, b]
+    except Exception:
+        return hashlib.sha1(data).hexdigest()
+
+
+def same_picture(a, b) -> bool:
+    if isinstance(a, str) or isinstance(b, str):
+        return a == b
+    return bin(a[0] ^ b[0]).count("1") <= 6 and max(abs(x - y) for x, y in zip(a[1:], b[1:])) <= 24
+
+
+def add_unique(core, root: Path, group: str, data: bytes) -> str:
+    """存一張圖並加進分組清單；圖庫裡已經有同一張（指紋相同）就丟 ValueError("已經有了")。"""
+    names = core.images(group)
+    prints = {n: p for n, p in (core.store.get_meta(f"imgfp:{group}") or {}).items() if n in names}
+    for n in names:                         # 以前上傳、還沒算過指紋的補算
+        if n not in prints and (p := path_of(root, f"{group}/{n}")):
+            prints[n] = fingerprint(p.read_bytes())
+    mine = fingerprint(data)
+    if any(same_picture(mine, p) for p in prints.values()):
+        core.store.set_meta(f"imgfp:{group}", prints)
+        raise ValueError("已經有了")
+    name = save(root, group, data)
+    prints[name] = mine
+    core.store.set_meta(f"imgfp:{group}", prints)
+    core.set_images(group, names + [name])
+    return name

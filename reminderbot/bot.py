@@ -9,6 +9,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import tasks
@@ -198,7 +199,12 @@ class ReminderBot(discord.Client):
     def _setup_commands(self):
         self.tree = app_commands.CommandTree(self)
         if not self.config.slash:
-            self._setup_says(self.config.key, self.config.key.capitalize())    # 蔣寶：只有 /jbao says
+            if self.store.settings().get("persona") == "gallery":          # 雪豹：右鍵選單把圖加進圖庫
+                @self.tree.context_menu(name=f"加到{self.config.name}圖庫")
+                async def add_menu(interaction: discord.Interaction, message: discord.Message):
+                    await self._add_to_gallery(interaction, message)
+            else:
+                self._setup_says(self.config.key, self.config.key.capitalize())    # 蔣寶：只有 /jbao says
             return
 
         @self.tree.command(name="說明", description="看賈維斯會做什麼")
@@ -224,6 +230,52 @@ class ReminderBot(discord.Client):
         @app_commands.describe(地點="例如：台中、明天、台中明天（不填就看你所在地）")
         async def weather_cmd(interaction: discord.Interaction, 地點: str = ""):
             await self._slash(interaction, "weather", 地點)
+
+    async def _add_to_gallery(self, interaction: discord.Interaction, message: discord.Message):
+        """那則訊息裡的圖（附件、貼的圖片連結）全部加進圖庫；同一張圖不重複收。"""
+        if interaction.user.id != self.config.owner_id and not self.store.settings()["gallery_anyone"]:
+            return await interaction.response.send_message("只有主人可以加圖。", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        sources = [a for a in message.attachments
+                   if (a.content_type or "").startswith("image/") or re.search(r"\.(png|jpe?g|gif|webp)$", a.filename, re.I)]
+        urls = [u for e in message.embeds for u in (e.image.url if e.image else None,
+                                                    e.thumbnail.url if e.thumbnail and not e.image else None) if u]
+        added = dup = bad = 0
+        root = images.folder(self.config.db_path)
+
+        async def keep(data: bytes):
+            nonlocal added, dup, bad
+            try:
+                images.add_unique(self.core, root, "pics", data)
+                added += 1
+            except ValueError as e:
+                dup, bad = (dup + 1, bad) if str(e) == "已經有了" else (dup, bad + 1)
+        for a in sources:
+            if a.size > images.MAX_BYTES:
+                bad += 1
+                continue
+            await keep(await a.read())
+        if urls:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+                for u in urls:
+                    try:
+                        async with session.get(u) as r:
+                            data = await r.content.read(images.MAX_BYTES + 1) if r.status == 200 else b""
+                    except (aiohttp.ClientError, asyncio.TimeoutError):
+                        data = b""
+                    if data and len(data) <= images.MAX_BYTES:
+                        await keep(data)
+                    else:
+                        bad += 1
+        if not (added or dup or bad):
+            return await interaction.followup.send("這則訊息裡沒有圖。", ephemeral=True)
+        total = len(self.core.images("pics"))
+        parts = [f"加進{self.config.name}圖庫 {added} 張，現在共 {total} 張。" if added else "沒有加新的圖。"]
+        if dup:
+            parts.append(f"{dup} 張已經在圖庫裡了。")
+        if bad:
+            parts.append(f"{bad} 張加不了：超過 8MB 或不是 png／jpg／gif／webp。")
+        await interaction.followup.send("".join(parts), ephemeral=True)
 
     def _setup_says(self, cmd: str, who: str):
         """/<cmd> says 和右鍵選單「<who> says」：用 says 圖庫的圖回覆某則訊息。"""
