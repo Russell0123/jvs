@@ -13,7 +13,7 @@ from discord.ext import tasks
 
 from . import images, weather
 from .config import Config
-from .core import Assistant, Button, Edit, Incoming, NeedWeather, Send, User
+from .core import Assistant, Button, Edit, Incoming, NeedWeather, React, Send, User
 from .store import SqliteStore
 
 log = logging.getLogger(__name__)
@@ -317,6 +317,15 @@ class ReminderBot(discord.Client):
             return str(e) if e else m.group(0)
         return EMOJI_RE.sub(sub, text)
 
+    async def _react(self, a: React, source: discord.Message | None):
+        msg = source if source is not None and source.id == a.message_id else \
+            (await self._channel(a.channel_id)).get_partial_message(a.message_id)
+        emoji = self.emo(a.emoji, getattr(source, "guild", None))
+        if EMOJI_RE.fullmatch(emoji):
+            log.warning("找不到表符 %s：名稱要跟伺服器裡的一樣", a.emoji)
+            return
+        await msg.add_reaction(emoji)
+
     async def _channel(self, channel_id: int):
         return self.get_channel(channel_id) or await self.fetch_channel(channel_id)
 
@@ -334,6 +343,8 @@ class ReminderBot(discord.Client):
                     await msg.edit(content=content, view=None if a.clear_buttons else discord.utils.MISSING)
                 elif isinstance(a, NeedWeather):
                     await self._weather(a, source)
+                elif isinstance(a, React):
+                    await self._react(a, source)
             except discord.HTTPException:
                 log.exception("動作失敗：%s", a)
 

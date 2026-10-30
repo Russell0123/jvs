@@ -17,7 +17,7 @@ from datetime import datetime, time, timedelta
 from . import timeparse, weather
 from .router import REMINDER_RE, Intent, clean_reminder_text, extract_wishes, fuzzy_match, route
 from . import rules
-from .settings import find_county, phrases, split_pool, topics, wish_acks, wish_verb
+from .settings import auto_reactions, find_county, phrases, split_pool, topics, wish_acks, wish_verb
 
 HELP = """**我會做這些事**
 👋 **叫我**：@賈維斯，或句子裡提到賈維斯、Jarvis
@@ -110,6 +110,14 @@ class Edit:
 
     def __post_init__(self):
         self.append = strip_marks(self.append)
+
+
+@dataclass
+class React:
+    """幫某則訊息按表符（:名稱: 由轉接層換成伺服器表情）。"""
+    channel_id: int
+    message_id: int
+    emoji: str
 
 
 @dataclass
@@ -246,16 +254,28 @@ class Assistant:
     def handle(self, msg: Incoming, now: datetime) -> list:
         """自訂規則先比對：「取代」就只回規則的；「另外回」就原本的照做再補一則。"""
         s = self.store.settings()
+        reacts = self.reactions(msg, s)
         rule = self._rule_for(msg, now, s)
         if rule and rule["mode"] == "replace":
             self.last_intent = Intent("rule", text=rule["name"])
-            return self._rule_reply(rule, msg, now, s)
-        out = self._handle(msg, now, s)
+            return reacts + self._rule_reply(rule, msg, now, s)
+        out = reacts + self._handle(msg, now, s)
         if rule:
             if not out or not self.last_intent or self.last_intent.kind == "unknown":
                 self.last_intent = Intent("rule", text=rule["name"])
             out = out + self._rule_reply(rule, msg, now, s)
         return out
+
+    def reactions(self, msg: Incoming, s: dict) -> list:
+        """設定「自動按表符」：去掉空白、標點、@ 之後比對關鍵字。"""
+        text = re.sub(r"<[@#][!&]?\d+>", "", msg.text)
+        text = re.sub(r"<a?:(\w+):\d+>", r"\1", text)
+        text = re.sub(r"[\W_]+", "", text).lower()
+        marks = []
+        for pat, emojis in auto_reactions(s):
+            if pat.search(text):
+                marks += [e for e in emojis if e not in marks]
+        return [React(msg.channel_id, msg.message_id, e) for e in marks]
 
     def _rule_for(self, msg: Incoming, now: datetime, s: dict) -> dict | None:
         text = re.sub(r"<@[!&]?\d+>", " ", msg.text).strip()

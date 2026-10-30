@@ -8,7 +8,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from reminderbot import weather
 from reminderbot.config import Config
-from reminderbot.core import Assistant, Edit, Incoming, NeedWeather, Send, User
+from reminderbot.core import Assistant, Edit, Incoming, NeedWeather, React, Send, User
 from reminderbot.store import MemoryStore, SqliteStore
 from reminderbot.web import make_app
 
@@ -813,3 +813,15 @@ def test_no_image_token(core):
     core.set_images(f"r{rule['id']}", ["x.png"])
     [(_, r)] = Chat(core).say(MING, "賈維斯 晚安", mentioned=False)
     assert r.text == "晚安" and core.resolve_image(r.image) == ""
+
+
+def test_auto_reactions(core):
+    def reacts(text, mentioned=False):
+        acts = core.handle(Incoming(MING, text, CH, 55, mentioned=mentioned), T0)
+        return [a.emoji for a in acts if isinstance(a, React) and a.message_id == 55]
+    for t in ["雞巴", "你這個級吧", "計 八", "機.把", "jiba", "雞 8", "<@123>機把"]:
+        assert reacts(t) == [":jibar:"], t
+    assert reacts("這是雞肉吧") == [] and reacts("記得吧") == []
+    assert reacts("賈維斯 雞巴", mentioned=True) == [":jibar:"]              # 叫它的也照按，回覆照回
+    core.store.save_settings({"auto_reactions": "好耶/[讚贊]｜👍 :yay:\n好耶｜🎉"})
+    assert reacts("好 耶！") == ["👍", ":yay:", "🎉"] and reacts("贊") == ["👍", ":yay:"]

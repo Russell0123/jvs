@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from reminderbot import rules, timeparse, weather
 from reminderbot.explain import describe, rules as logic_rules
-from reminderbot.core import Assistant, Edit, Incoming, NeedWeather, Send, User
+from reminderbot.core import Assistant, Edit, Incoming, NeedWeather, React, Send, User
 from reminderbot.settings import (COUNTIES, DEFAULTS, GROUPS, HINTS, LABELS, MULTILINE_KEYS, REPLY_GROUPS, REPLY_KEYS,
                                   SETTING_KEYS, note_categories, validate, wish_lists)
 from reminderbot.store import MemoryStore
@@ -296,6 +296,10 @@ class Sim:
                     self._msg(mid)["image"] = self.core.resolve_image(a.image)
                 if a.reminder_id:
                     self.core.sent(a.reminder_id, mid, a.channel_id)
+            elif isinstance(a, React):
+                m = self._msg(a.message_id)
+                if m is not None and a.emoji not in m.setdefault("reactions", []):
+                    m["reactions"].append(a.emoji)
             elif isinstance(a, Edit):
                 m = self._msg(a.message_id)
                 if m:

@@ -137,6 +137,8 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
 .sec-title { font-size: 13px; font-weight: 700; color: var(--accent); margin-top: 6px; }
 .thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .thumbs span { position: relative; }
+.reacts { display: flex; gap: 4px; margin-top: 4px; }
+.reacts span { font-size: 12px; padding: 1px 8px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--accent); }
 .imgcode { display: block; font-size: 11px; color: var(--muted); text-align: center; cursor: pointer; }
 .thumbs img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; display: block; }
 .thumbs button { position: absolute; top: -6px; right: -6px; border: 0; border-radius: 50%; width: 18px; height: 18px; padding: 0; font-size: 11px; line-height: 18px; background: var(--surface-2); color: var(--fg); }
@@ -317,7 +319,7 @@ function drawLog() {
       <div style="min-width:0">${ref ? `<div class="replyto">${esc(nameOf(ref.author))}：${esc(plain(ref.text).slice(0, 50))}</div>` : ""}
         <div class="who"><b class="${isBot ? "bot" : ""}">${esc(nameOf(m.author))}</b><span class="chan c${m.channel}">#${esc((info.channels.find(c => c.id === m.channel) || {}).name || "")}</span><time>${esc(m.time)}</time>${m.tag ? `<span class="tag">${esc(m.tag)}</span>` : ""}${m.ephemeral_for ? '<span class="tag">只有你看得到</span>' : ""}
           ${isBot && !m.ephemeral_for ? `<button class="act" data-reply="${m.id}">回覆</button>` : ""}</div>
-        ${m.text ? `<div class="text">${render(isBot ? m.text : m.text.replace(/^<@1000>\s*/, ""))}</div>` : ""}${m.embed ? card(m.embed) : ""}${m.image ? attachment(m.image) : ""}${btns}${intent}
+        ${m.text ? `<div class="text">${render(isBot ? m.text : m.text.replace(/^<@1000>\s*/, ""))}</div>` : ""}${m.embed ? card(m.embed) : ""}${m.image ? attachment(m.image) : ""}${m.reactions ? `<div class="reacts">${m.reactions.map(r => `<span>${esc(r)} 1</span>`).join("")}</div>` : ""}${btns}${intent}
       </div></article>`;
   }
   log.innerHTML = html || `<div class="empty">還沒有訊息</div>`;

@@ -59,6 +59,8 @@ DEFAULTS: dict = {
     "show_exact_time": False,         # 回覆下面用小字附上實際時間（預設關；按「查看」看得到）
 
     # 常見提醒：講到這些就建立同一種提醒，用固定的回法（一行一種：名稱｜關鍵字｜設好時的回覆｜時間到的訊息，多個用 / 隔開）
+    # 看到關鍵字就幫那則訊息按表符：一行一組「關鍵字/關鍵字｜表符 表符」，[ ] 裡的字任一個都算
+    "auto_reactions": "[雞机機級级及几幾計记記基吉擊击姬積积肌激鸡][吧巴八把叭爸芭霸捌粑扒8]/jiba｜:jibar:",
     "topics": "休息｜睡覺/休息/午睡/去睡/睡/躺一下/放鬆/小睡｜好，我會提醒你休息。/OK，到時候叫你休息。｜該休息囉。/去休息吧。\n"
               "喝水｜喝水/喝點水/補水/喝杯水/喝口水｜好，會叫你喝水。/OK，記得喝水。｜喝口水吧💧/該喝水囉💧\n"
               "吃飯｜吃飯/吃午餐/吃晚餐/吃早餐/吃午飯/吃晚飯/吃早飯/用餐/吃東西｜好，到時候叫你吃飯。/OK，會提醒你吃飯。｜該吃飯囉🍚/去吃飯吧🍚\n"
@@ -153,6 +155,7 @@ LABELS = {
     "unknown_phrases": "聽不懂、別人叫它做事時",
     "rain_advice": "叮嚀：下雨 {day}", "hot_advice": "叮嚀：很熱 {day}", "cold_advice": "叮嚀：偏冷 {day}", "nice_advice": "叮嚀：舒服 {day}",
     "topics": "名稱｜關鍵字｜回覆｜時間到（多個用 / 隔開）",
+    "auto_reactions": "一行一組：關鍵字｜表符。關鍵字用 / 分開，[ ] 裡的字任一個都算，例如 [雞機][吧巴]；表符寫 :名稱: 或直接放 emoji，多個用空白分開。會先去掉空白和標點再比對",
     "show_exact_time": "回覆附上實際時間",
     "btn_done_label": "完成", "btn_later_label": "晚點", "btn_later_minutes": "晚點＝幾分鐘後",
     "btn_tomorrow_label": "明天", "btn_tomorrow_time": "明天＝幾點", "btn_stop_label": "之後都取消",
@@ -191,6 +194,7 @@ GROUPS = [
     ("天氣變化通知", ["weather_alert_enabled", "weather_check_minutes", "weather_alert_hours", "weather_quiet"]),
     ("清單", ["wish_lists", "wish_listen_ids", "passive_ack", "suggest_count", "suggest_half_life_days",
             "note_categories"]),
+    ("自動按表符", ["auto_reactions"]),
     ("其他", ["show_exact_time"]),
 ]
 # 回覆頁：bot 會說的每一句話
@@ -213,7 +217,7 @@ REPLY_KEYS = [k for _, keys in REPLY_GROUPS for k in keys]
 SETTING_KEYS = [k for _, keys in GROUPS for k in keys]
 MULTILINE_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, str) and "\n" in v] + \
     [k for k in REPLY_KEYS if k not in ("timer_template", "rain_template")]
-MULTILINE_KEYS = list(dict.fromkeys(MULTILINE_KEYS))
+MULTILINE_KEYS = list(dict.fromkeys(MULTILINE_KEYS + ["auto_reactions"]))
 
 BOOL_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, bool)]
 INT_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, int) and not isinstance(v, bool)]
@@ -270,6 +274,25 @@ def topics(settings: dict) -> list[Topic]:
         split = lambda x: [i.strip() for i in x.split("/") if i.strip()]  # noqa: E731
         out.append(Topic(parts[0], split(parts[1]), split(parts[2]) if len(parts) > 2 else [],
                          split(parts[3]) if len(parts) > 3 else []))
+    return out
+
+
+def keyword_regex(word: str) -> str:
+    """關鍵字 → 正規表示式：[ ] 裡的字任一個都算，其他照字面。"""
+    out = []
+    for m in re.finditer(r"\[([^\]]+)\]|(.)", word.lower()):
+        out.append("[" + "".join(re.escape(c) for c in m.group(1)) + "]" if m.group(1) else re.escape(m.group(2)))
+    return "".join(out)
+
+
+def auto_reactions(settings: dict) -> list[tuple[re.Pattern, list[str]]]:
+    """「關鍵字/關鍵字｜表符 表符」→ [(比對用的 regex, [表符…])]。"""
+    out = []
+    for line in str(settings.get("auto_reactions", "")).splitlines():
+        words, _, marks = re.sub(r"[｜|]", "|", line, count=1).partition("|")
+        pats = [keyword_regex(re.sub(r"\s+", "", w)) for w in words.split("/") if w.strip()]
+        if pats and marks.split():
+            out.append((re.compile("|".join(pats)), marks.split()))
     return out
 
 
