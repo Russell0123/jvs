@@ -67,6 +67,8 @@ class Incoming:
     reply_to_bot_message_id: int | None = None  # 回覆的是 bot 的哪則訊息
     mentioned: bool = True                      # 有沒有 @ bot；沒有的話只聽願望（而且只聽指定的人）
     at: bool = False                            # 真的打了 @它（不含「回覆它的訊息」）
+    skip_rules: tuple = ()                      # 自己講的話：是哪條規則回出來的（那條預設不再觸發，不會自己重播）
+    from_bot: bool = False                      # 是機器人講的
 
 
 @dataclass
@@ -98,6 +100,7 @@ class Send:
     embed: dict | None = None                   # 卡片：title / description / fields / color / footer
     ephemeral: bool = False                     # 只有對方看得到（/ 指令）
     image: str = ""                             # 附圖：圖庫裡的「分組/檔名」，或「#代碼」
+    rule_id: int = 0                            # 哪條自訂回覆送的
 
     def __post_init__(self):
         if self.text and "\x00" in self.text:
@@ -465,7 +468,7 @@ class Assistant:
             if r["task"] != "any" and has_task is None:
                 has_task = bool(clean) and route(clean, now, s).kind != "unknown"
             if not rules.matches(r, author_id=msg.author.id, owner=self.is_owner(msg.author.id), called=called,
-                                 has_task=bool(has_task), text=text):
+                                 has_task=bool(has_task), text=text, from_bot=msg.from_bot, skip=msg.skip_rules):
                 continue
             key = f"rulefire:{r['id']}:{msg.channel_id}"
             if r["cooldown"] and now.timestamp() - (self.store.get_meta(key) or 0) < r["cooldown"] * 60:
@@ -475,6 +478,12 @@ class Assistant:
         return None
 
     def _rule_reply(self, rule: dict, msg: Incoming, now: datetime, s: dict) -> list:
+        out = self._rule_sends(rule, msg, now, s)
+        for a in out:
+            a.rule_id = rule["id"]
+        return out
+
+    def _rule_sends(self, rule: dict, msg: Incoming, now: datetime, s: dict) -> list:
         rng = random.Random((msg.message_id or int(now.timestamp())) + rule["id"])
         pool = split_pool(rule["replies"])
         if rule.get("send") == "all":

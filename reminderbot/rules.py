@@ -10,9 +10,11 @@ WHO = {"any": "任何人", "owner": "只有我", "others": "我以外的人", "l
 CALL = {"yes": "要叫它", "no": "不用叫也會"}
 TASK = {"any": "都可以", "yes": "有交代事情", "no": "沒交代事情"}
 MODE = {"add": "原本的照做，另外再回", "replace": "取代原本的回覆"}
+BOTS = {"others": "會觸發，但不會被這條自己回的話觸發", "loop": "可以循環觸發：自己回的話也會再觸發這條",
+        "no": "不會觸發：只有人講的才算"}
 SEND = {"one": "隨機挑一句、一張", "all": "全部依序送出：一句／一張一則訊息"}
 BLANK = {"id": 0, "name": "", "on": True, "who": "any", "users": [], "call": "yes", "task": "any",
-         "words": "", "not_words": "", "mode": "add", "replies": "", "cooldown": 0, "send": "one"}
+         "words": "", "not_words": "", "mode": "add", "replies": "", "cooldown": 0, "send": "one", "bots": "others"}
 
 
 def split_words(raw: str) -> list[str]:
@@ -44,7 +46,7 @@ def from_form(form: dict, rid: int) -> tuple[dict, list[str]]:
         "who": pick("who", WHO), "users": users, "call": pick("call", CALL), "task": pick("task", TASK),
         "words": str(form.get("words", "")).strip(), "not_words": str(form.get("not_words", "")).strip(),
         "mode": pick("mode", MODE), "replies": str(form.get("replies", "")).replace("\r\n", "\n").strip(),
-        "cooldown": cooldown, "send": pick("send", SEND),
+        "cooldown": cooldown, "send": pick("send", SEND), "bots": pick("bots", BOTS),
     }
     if rule["who"] == "list" and not users:
         errors.append("「指定的人」要填 Discord 使用者 ID")
@@ -53,8 +55,12 @@ def from_form(form: dict, rid: int) -> tuple[dict, list[str]]:
     return rule, errors
 
 
-def matches(rule: dict, *, author_id: int, owner: bool, called: bool, has_task: bool, text: str) -> bool:
+def matches(rule: dict, *, author_id: int, owner: bool, called: bool, has_task: bool, text: str,
+            from_bot: bool = False, skip: tuple = ()) -> bool:
     if not rule["on"]:
+        return False
+    bots = rule.get("bots", "others")
+    if from_bot and (bots == "no" or (bots == "others" and rule["id"] in skip)):
         return False
     who = rule["who"]
     if (who == "owner" and not owner) or (who == "others" and owner) or \
@@ -82,7 +88,8 @@ def summary(rule: dict) -> str:
     if rule["not_words"]:
         parts.append("不含 " + "/".join(split_words(rule["not_words"])))
     return "・".join(parts) + (" → 取代" if rule["mode"] == "replace" else " → 另外回") + \
-        ("・依序全部送" if rule.get("send") == "all" else "")
+        ("・依序全部送" if rule.get("send") == "all" else "") + \
+        ("・可循環" if rule.get("bots") == "loop" else "・機器人不觸發" if rule.get("bots") == "no" else "")
 
 
 # 每個 bot 預設帶的規則（第一次啟動時加進去，之後在網頁改；刪掉也不會再加回來）

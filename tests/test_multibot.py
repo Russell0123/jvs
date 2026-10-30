@@ -390,3 +390,48 @@ def test_task_words():
     store.save_settings({"handoff_phrases": "對於{任務}，我非常重視"})
     [r, h] = core.handle(Incoming(ming, "蔣寶 幫我寫作業", 1, 30, mentioned=False), NOW)
     assert r.text == "對於這件事，我非常重視 {jvs}" and isinstance(h, Handoff) and h.text == "幫我寫作業"
+
+
+def test_rule_does_not_retrigger_itself():
+    """蔣寶「晚安」規則回「晚安市民朋友…」：自己講的這句不會再觸發同一條，但可以觸發別的規則。"""
+    core, store = jbao_core()
+    night, _ = rules.from_form({"name": "晚安", "on": "on", "call": "no", "words": "晚安", "mode": "replace",
+                                "replies": "晚安市民朋友，我也要去抱著心愛的得立睡覺了"}, 1)
+    bed, _ = rules.from_form({"name": "得立", "on": "on", "call": "no", "words": "得立", "mode": "replace",
+                              "replies": "得立好可愛"}, 2)
+    rules.save(store, [night, bed])
+    jbao = User(555, "蔣寶")
+    [r] = core.handle(Incoming(ME, "有沒有人要講晚安", 1, 5, mentioned=False), NOW)
+    assert r.rule_id == 1
+    # 蔣寶自己講的那句：跳過「晚安」規則，改觸發「得立」
+    [r2] = core.handle(Incoming(jbao, r.text, 1, 6, mentioned=False, skip_rules=(1,), from_bot=True),
+                       NOW + timedelta(minutes=1))
+    assert r2.text == "得立好可愛" and r2.rule_id == 2
+    # 「得立好可愛」沒有晚安也沒有得立以外的關鍵字……得立規則自己也不會重播
+    assert core.handle(Incoming(jbao, r2.text, 1, 7, mentioned=False, skip_rules=(2,), from_bot=True),
+                       NOW + timedelta(minutes=2)) == []
+    # 設成「可以循環觸發」：自己回的話會再觸發自己
+    night["bots"] = "loop"
+    rules.save(store, [night, bed])
+    [r3] = core.handle(Incoming(jbao, r.text, 1, 8, mentioned=False, skip_rules=(1,), from_bot=True),
+                       NOW + timedelta(minutes=3))
+    assert r3.rule_id == 1
+    # 設成「不會觸發」：機器人講的都不算，人講的照常
+    night["bots"], bed["bots"] = "no", "no"
+    rules.save(store, [night, bed])
+    assert core.handle(Incoming(jbao, "晚安", 1, 9, mentioned=False, from_bot=True), NOW + timedelta(minutes=4)) == []
+    assert core.handle(Incoming(ME, "晚安", 1, 10, mentioned=False), NOW + timedelta(minutes=5))
+
+
+async def test_send_remembers_rule():
+    from reminderbot import bot as botmod
+
+    async def send(text, **kw):
+        return SimpleNamespace(id=4242, channel=SimpleNamespace(id=1))
+
+    async def channel(cid):
+        return SimpleNamespace(send=send, guild=None)
+    me = SimpleNamespace(_channel=channel, emo=lambda t, g=None: t, _peer_mention=lambda t: t,
+                         core=SimpleNamespace(sent=lambda *a: None))
+    await botmod.ReminderBot._send(me, Send(1, "晚安市民朋友", rule_id=7), None)
+    assert botmod.FROM_RULE[4242] == 7

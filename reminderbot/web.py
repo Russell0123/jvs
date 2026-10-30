@@ -644,6 +644,7 @@ def make_app(bots) -> web.Application:
             f"<label>但不包含</label><input type='text' name='not_words' value='{val('not_words')}' placeholder='交了'>"
             f"<label>符合的話</label>{sel('mode', rules.MODE)}"
             f"<label>送幾則</label>{sel('send', rules.SEND)}"
+            f"<label>機器人講的話</label>{sel('bots', rules.BOTS)}"
             f"<label>回覆：一行一句隨機挑，多行的句子用 \" \" 包起來，句子後面加 {{圖:代碼}} 配指定的圖、{{圖:無}} 不附圖；"
             f"可用 {{時段}} {{名字}} {{天氣}}，可以不填只回圖</label>"
             f"<textarea name='replies' rows='3'>{escape(r['replies'])}</textarea>"

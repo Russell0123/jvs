@@ -36,10 +36,17 @@ NO_CHAIN_DEPTH = 10 ** 6
 PEER_WAIT = 0.8         # 等送出的那邊把層數記好（Discord 的事件有時比送出的回應先到）
 
 
-def remember_depth(message_id: int, depth: int):
+FROM_RULE: collections.OrderedDict = collections.OrderedDict()     # 訊息 ID → 哪條自訂回覆送的
+
+
+def remember_depth(message_id: int, depth: int, rule_id: int = 0):
     DEPTH[message_id] = depth
+    if rule_id:
+        FROM_RULE[message_id] = rule_id
     while len(DEPTH) > 2000:
         DEPTH.popitem(last=False)
+    while len(FROM_RULE) > 2000:
+        FROM_RULE.popitem(last=False)
 # 說法裡的 :duzi: → <:duzi:ID>（bot 送 :名字: 不會自己變表情）；<:x:1>、<a:x:1>、12:30:00 不會被動到
 EMOJI_RE = re.compile(r"(?<![<\w])[:：]([A-Za-z0-9_]{2,32})[:：](?!\d)")
 STYLES = {"success": discord.ButtonStyle.success, "danger": discord.ButtonStyle.danger,
@@ -434,7 +441,10 @@ class ReminderBot(discord.Client):
             reply_to_bot_message_id=replied,
             mentioned=mentioned,
             at=f"<@{self.user.id}>" in message.content or f"<@!{self.user.id}>" in message.content
-            or any(self._is_my_role(r) for r in message.role_mentions))
+            or any(self._is_my_role(r) for r in message.role_mentions),
+            # 自己的某條規則回的話，不會再觸發同一條（不然「晚安」回「晚安…」會自己重播到上限）
+            skip_rules=(FROM_RULE[message.id],) if message.author.id == self.user.id and message.id in FROM_RULE else (),
+            from_bot=message.author.bot)
         try:
             await self.run_actions(self.core.handle(incoming, self.now()), source=message)
         except Exception:
@@ -602,7 +612,7 @@ class ReminderBot(discord.Client):
                 kwargs["reference"] = discord.MessageReference(message_id=a.reply_to, channel_id=channel.id,
                                                                fail_if_not_exists=False)
             msg = await channel.send(text, **kwargs)
-        remember_depth(msg.id, NO_CHAIN_DEPTH if "{jvs}" in (a.text or "") else CUR_DEPTH.get() + 1)
+        remember_depth(msg.id, NO_CHAIN_DEPTH if "{jvs}" in (a.text or "") else CUR_DEPTH.get() + 1, a.rule_id)
         if a.reminder_id:
             self.core.sent(a.reminder_id, msg.id, msg.channel.id)
 
