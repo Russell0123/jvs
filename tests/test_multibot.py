@@ -372,3 +372,21 @@ def test_unicode_emoji_names():
     store = MemoryStore()
     seed_profile(store, "jbao")
     assert store.settings()["self_loop"] == 10
+
+
+def test_task_words():
+    jvs = Assistant(MemoryStore(), TZ, owner_id=7)
+    pool = jvs.store.settings()["unknown_phrases"].splitlines()
+    ming = User(8, "小明")
+    for i, t in enumerate(["賈維斯 幫我寫作業", "賈維斯 給我一張圖", "賈維斯 教我畫畫", "賈維斯 能不能唱歌"]):
+        for who in (ME, ming):                                         # 做不到：誰叫都拒絕
+            [r] = jvs.handle(Incoming(who, t, 1, 10 + i, mentioned=False), NOW + timedelta(minutes=i))
+            assert r.text in pool and jvs.last_intent.kind == "cannot", t
+    out = jvs.handle(Incoming(ME, "賈維斯 能不能明天下午3點提醒我交報告", 1, 20, mentioned=False), NOW)
+    assert jvs.store.user_reminders(7)                                 # 做得到就照做
+    assert jvs.handle(Incoming(ME, "幫我寫作業", 1, 21, mentioned=False), NOW) == []   # 沒叫它不管
+    # 蔣寶：「幫我…」也轉給賈維斯，{任務} 變成「這件事」
+    core, store = jbao_core()
+    store.save_settings({"handoff_phrases": "對於{任務}，我非常重視"})
+    [r, h] = core.handle(Incoming(ming, "蔣寶 幫我寫作業", 1, 30, mentioned=False), NOW)
+    assert r.text == "對於這件事，我非常重視 {jvs}" and isinstance(h, Handoff) and h.text == "幫我寫作業"

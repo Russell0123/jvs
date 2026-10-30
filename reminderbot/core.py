@@ -373,9 +373,11 @@ class Assistant:
             task = it.kind not in ("unknown", "help")
             if not task and (self._food_asked(clean, s) or ((pat := yesno_regex(s)) and pat.search(clean))):
                 it, task = Intent("food" if self._food_asked(clean, s) else "yesno"), True
+            if not task and self._task_asked(clean, s):
+                it, task = Intent("cannot"), True        # 「幫我…」也轉給賈維斯，讓它判斷做不做得到
             if task:
                 from .explain import describe
-                label = (describe(it, self.tz) or {}).get("label", "這件事")
+                label = "這件事" if it.kind == "cannot" else (describe(it, self.tz) or {}).get("label", "這件事")
                 rng = random.Random(msg.message_id or int(now.timestamp()))
                 line = self.phrase(s, "handoff_phrases", rng, 任務=label)
                 self.last_intent = Intent("handoff", text=label)
@@ -502,6 +504,10 @@ class Assistant:
                 self.last_intent = Intent("refuse", text="不是主人")
                 return self._reply(msg, self.phrase(s, "unknown_phrases", rng))
             return self._dispatch(msg, it, s, now, rng)
+        if clean and self._task_asked(clean, s):
+            # 「幫我…」「能不能…」：是要它做事，但上面都對不上 → 做不到，任何人都回一句拒絕
+            self.last_intent = Intent("cannot")
+            return self._reply(msg, self.phrase(s, "unknown_phrases", rng))
         if clean and (pat := yesno_regex(s)) and pat.search(clean):
             self.last_intent = Intent("yesno")
             return self._reply(msg, self.phrase(s, "yesno_phrases", rng))
@@ -625,6 +631,9 @@ class Assistant:
             return [NeedWeather(county, channel_id, town=town, ephemeral=True,
                                 mode="tomorrow" if "明" in arg else "today" if "今" in arg else "")]
         return say_("沒有這個指令。")
+
+    def _task_asked(self, text: str, s: dict) -> bool:
+        return any(w.strip() and w.strip() in text for w in str(s["task_words"]).split("/"))
 
     # ---------- 吃什麼 ----------
     def _food_asked(self, text: str, s: dict) -> bool:

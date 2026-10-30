@@ -27,7 +27,8 @@ DEFAULTS: dict = {
     "greet_words": "嗨,嘿,hi,hey,hello,哈囉,你好,您好,早安,午安,晚安,安安,yo",
     "greet_rare_percent": 5,         # 打招呼時有幾 % 機率回「稀有」那句
     "greet_image_percent": 100,
-    "yesno_patterns": "要*嗎/要不要",  # 叫它時句子符合就隨機回「要／再考慮看看」這類；* = 中間任何字，用 / 分開      # 打招呼時附圖的機率（圖庫有圖才會附）
+    "yesno_patterns": "要*嗎/要不要",
+    "task_words": "幫我/給我/教我/能不能",  # 叫它時句子有這些詞就算在交代事情：做不到就拒絕（蔣寶轉給賈維斯）  # 叫它時句子符合就隨機回「要／再考慮看看」這類；* = 中間任何字，用 / 分開      # 打招呼時附圖的機率（圖庫有圖才會附）
 
     # bot 的口吻：一行一句，每次隨機挑，最近用過的 3 句不會馬上再用
     # 規則：短句（3～12 字）、不重述你說的內容、不加括號說明
@@ -160,6 +161,7 @@ LABELS = {
     "all_channels": "所有頻道都回應（提醒發到提醒頻道）",
     "owner_only": "只有主人能叫它做事", "bot_names": "叫它的名字（逗號分隔，含錯字）",
     "greet_words": "打招呼的字（逗號分隔）", "greet_rare_percent": "稀有招呼機率 %", "greet_image_percent": "打招呼附圖機率 %（圖片頁上傳）",
+    "task_words": "交代事情的詞：叫它時有這些詞就算要它做事，賈維斯做不到會拒絕，蔣寶會轉給賈維斯。用 / 分開",
     "yesno_patterns": "問要不要：符合這些句型就隨機回，* 代表中間任何字，用 / 分開",
     "yesno_phrases": "問要不要的回答",
     "handoff_phrases": "被叫去做賈維斯會的事時回的話，後面會自動 @賈維斯，然後賈維斯接手。可以用 {任務}，例如「提醒」「天氣」",
@@ -217,7 +219,7 @@ GROUPS = [
     ("功能", ["respond", "listen_bots", "self_loop", "feature_reminder", "feature_note", "feature_timer", "feature_weather", "feature_mention_others",
             "all_channels"]),
     ("叫它", ["owner_only", "bot_names", "greet_words", "greet_rare_percent", "greet_image_percent",
-            "yesno_patterns"]),
+            "task_words", "yesno_patterns"]),
     ("按鈕", ["btn_done_label", "btn_later_label", "btn_later_minutes", "btn_tomorrow_label", "btn_tomorrow_time",
             "btn_stop_label"]),
     ("時間", ["date_only_time", "time_morning", "time_noon", "time_afternoon", "time_evening", "time_night",
@@ -260,7 +262,7 @@ REACTION_KEYS = ["auto_reactions"]
 
 # 轉介模式（蔣寶）只看得到這些
 RELAY_SETTING_GROUPS = [("功能", ["respond", "all_channels", "listen_bots", "self_loop"]),
-                        ("叫它", ["bot_names", "greet_words", "greet_rare_percent", "greet_image_percent"]),
+                        ("叫它", ["bot_names", "greet_words", "greet_rare_percent", "greet_image_percent", "task_words"]),
                         ("改暱稱", ["nick_rules"]), ("應聲蟲", ["echo_enabled", "echo_mode"])]
 RELAY_REPLY_GROUPS = [("轉給賈維斯", ["handoff_phrases"]), ("打招呼", ["greet_phrases", "greet_rare_phrases"])]
 NICK_GROUP = ("改暱稱", ["nick_rules"])
