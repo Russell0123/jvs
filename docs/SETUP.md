@@ -100,7 +100,7 @@ cd ~/jvs && git pull && sudo bash deploy/install.sh
    - 想換頭像可以在這頁上傳
 3. 左邊 **OAuth2** → 複製 **Client ID**，把下面網址的 `CLIENT_ID` 換掉，用瀏覽器打開邀請到伺服器：
    ```
-   https://discord.com/oauth2/authorize?client_id=CLIENT_ID&scope=bot+applications.commands&permissions=388160
+   https://discord.com/oauth2/authorize?client_id=CLIENT_ID&scope=bot+applications.commands&permissions=67497024
    ```
 4. 在主機上把 token 填進 `.env`，重啟：
    ```bash
@@ -111,7 +111,9 @@ cd ~/jvs && git pull && sudo bash deploy/install.sh
    sudo systemctl restart jvs
    journalctl -u jvs -n 30 --no-pager   # 看到「蔣寶 已登入」就成功了
    ```
-5. 打開設定網頁，最左邊多一個「蔣」，點進去就是蔣寶自己的設定。「設定 → 功能 → 回應訊息」打開才會開始回話。
+5. 打開設定網頁，最左邊多一個「蔣」，點進去就是蔣寶自己的設定。
+
+蔣寶是轉介模式：被叫去做賈維斯會的事就回一句官腔、@賈維斯，由賈維斯接手；另外會跑自訂回覆、表情符號、改暱稱。邀請網址裡已經包含「更改暱稱」權限，改不了暱稱的話檢查伺服器有沒有把這個權限關掉。
 
 token 錯了只會讓蔣寶不跑，賈維斯照常；紀錄裡會寫「蔣寶 的 token 不對」。
 

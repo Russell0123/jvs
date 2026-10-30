@@ -66,9 +66,12 @@ Discord 頻道 ──@jvs──▶ router（關鍵字分類）──▶ timepars
 - **一鍵更新**（右上角）：主機跑的版本、GitHub 上最新的版本；按下去就 git pull → 檢查 → 安裝 → 確認服務正常，新版起不來會自動退回上一版（詳見 [docs/SETUP.md](docs/SETUP.md#之後更新程式在設定網頁按一下)）
 
 ## 好幾個 bot
-`.env` 填了 `JBAO_DISCORD_TOKEN` 就會多跑一個「蔣寶」，同一支程式、同一個設定網頁，資料各自分開（`data/jbao.db`、`data/images-jbao/`）。蔣寶預設不回任何東西，步驟見 [docs/SETUP.md](docs/SETUP.md#45-加第二個-bot蔣寶)。
+`.env` 填了 `JBAO_DISCORD_TOKEN` 就會多跑一個「蔣寶」，同一支程式、同一個設定網頁，資料各自分開（`data/jbao.db`、`data/images-jbao/`）。步驟見 [docs/SETUP.md](docs/SETUP.md#45-加第二個-bot蔣寶)。
 
-Discord 裡沒有任何設定入口。網頁只聽 `127.0.0.1`，外面要連必須經過 Cloudflare Access（或 SSH 轉發）。
+蔣寶是「轉介模式」，沒有提醒、清單、打招呼這些功能，設定網頁也只顯示用得到的頁面：
+- **轉給賈維斯**：任何人叫蔣寶交代賈維斯會的事（提醒、天氣、吃什麼、問要不要…），蔣寶隨機回一句官腔並 @賈維斯，賈維斯接手照平常流程回覆那個人（不是主人一樣會被拒絕）。說法在「預設回覆」改，可以用 `{任務}`
+- **改暱稱**：叫它時講到關鍵字就改自己的暱稱，「設定 → 改暱稱」一行一組 `關鍵字/關鍵字｜暱稱/暱稱`，寫 `原名` 就改回來（賈維斯也能設）
+- **自訂回覆、表情符號**：跟賈維斯一樣
 
 ## 部署
 照 **[docs/SETUP.md](docs/SETUP.md)** 一步一步做：Discord bot → 氣象署 key → Oracle 免費 VM → 一鍵安裝 → Cloudflare 保護設定頁。

@@ -9,6 +9,9 @@ from .food import DEFAULT_LIBRARY, DEFAULT_QUESTIONS
 DEFAULTS: dict = {
     # 功能開關
     "respond": True,                 # 總開關：關掉就完全不理人（不回話、不按表符、不發天氣）
+    "persona": "assistant",          # assistant = 賈維斯那套；relay = 只做自訂回覆、表符、改暱稱，交代事情轉給賈維斯
+    # 叫它時講到關鍵字就改自己的暱稱：一行一組「關鍵字/關鍵字｜暱稱/暱稱」（多個暱稱隨機挑，寫「原名」就改回來）
+    "nick_rules": "",
     "feature_reminder": True,
     "feature_note": True,
     "feature_timer": True,
@@ -51,6 +54,11 @@ DEFAULTS: dict = {
     "food_reject_words": "不想吃/不吃/別的/討厭/難吃/不好吃/不要/換一個/換別的/吃膩/不喜歡/不愛/沒興趣/不想要",
     "food_reject_phrases": "吃屎\n媽的問題一堆欸",
     "food_pick_phrases": "就決定是 {food}！\n吃 {food} 吧\n{food}，走",
+    "handoff_phrases": "台北不會讓市民失望。我會親自盯緊這件事，朝讓台北成為世界一流城市的目標持續前進。\n"
+                       "感謝市民朋友對任務的關心，這也是我一直以來非常在意的議題。\n"
+                       "去年六月我們已建請中央協助處理，中央冷處理至今——希望中央地方一起合作，不要讓地方孤軍奮戰。\n"
+                       "請市民朋友放心，我們會盡速處理，積極回應各界關切，讓台北成為一座讓所有人驕傲的城市\n"
+                       "對於任務一事，我非常重視，也高度關切。",
     "yesno_phrases": "要\n要啊\n當然要\n再考慮看看\n先不要\n不要好了",
     "greet_phrases": "嘿\n提到我嗎？\n？\n您好\n咪嗚\n{時段}，{名字}\n{時段}～外面{天氣}",
     "greet_rare_phrases": "史塔克的肛門",
@@ -150,6 +158,8 @@ LABELS = {
     "greet_words": "打招呼的字（逗號分隔）", "greet_rare_percent": "稀有招呼機率 %", "greet_image_percent": "打招呼附圖機率 %（圖片頁上傳）",
     "yesno_patterns": "問要不要：符合這些句型就隨機回，* 代表中間任何字，用 / 分開",
     "yesno_phrases": "問要不要的回答",
+    "handoff_phrases": "被叫去做賈維斯會的事時回的話，後面會自動 @賈維斯，然後賈維斯接手。可以用 {任務}，例如「提醒」「天氣」",
+    "nick_rules": "一行一組「關鍵字/關鍵字｜暱稱/暱稱」：叫它時講到關鍵字就把自己的暱稱改掉，好幾個暱稱就隨機挑，寫「原名」就改回來",
     "food_triggers": "叫它時句子有這些詞就開始問，用 / 分開",
     "food_questions": "問題樹：一行一題「題目｜欄位｜代碼=選項／代碼=選項／不知道」，題目有「複選」就是複選；第一題分路線，之後用【代碼】分段",
     "food_library": "食物庫：一行一項「編號. 品項　路線｜價位｜感覺｜形式｜冷熱｜畫面｜爽法｜吃法」，每個字是一個標記，— 是沒有",
@@ -211,6 +221,7 @@ GROUPS = [
     ("天氣變化通知", ["weather_alert_enabled", "weather_check_minutes", "weather_alert_hours", "weather_quiet"]),
     ("清單", ["wish_lists", "wish_listen_ids", "passive_ack", "suggest_count", "suggest_half_life_days",
             "note_categories"]),
+    ("改暱稱", ["nick_rules"]),
     ("其他", ["show_exact_time"]),
 ]
 # 回覆頁：bot 會說的每一句話
@@ -237,11 +248,16 @@ FOOD_KEYS = [k for _, keys in FOOD_GROUPS for k in keys]
 # 表情符號頁：看到關鍵字自動按表符
 REACTION_GROUPS = [("自動按表符", ["auto_reactions"])]
 REACTION_KEYS = ["auto_reactions"]
+
+# 轉介模式（蔣寶）只看得到這些
+RELAY_SETTING_GROUPS = [("功能", ["respond", "all_channels"]), ("叫它", ["bot_names"]), ("改暱稱", ["nick_rules"])]
+RELAY_REPLY_GROUPS = [("轉給賈維斯", ["handoff_phrases"])]
+NICK_GROUP = ("改暱稱", ["nick_rules"])
 REPLY_KEYS = [k for _, keys in REPLY_GROUPS for k in keys]
 SETTING_KEYS = [k for _, keys in GROUPS for k in keys]
 MULTILINE_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, str) and "\n" in v] + \
     [k for k in REPLY_KEYS if k not in ("timer_template", "rain_template")]
-MULTILINE_KEYS = list(dict.fromkeys(MULTILINE_KEYS + ["auto_reactions"]))
+MULTILINE_KEYS = list(dict.fromkeys(MULTILINE_KEYS + ["auto_reactions", "nick_rules"]))
 
 BOOL_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, bool)]
 INT_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, int) and not isinstance(v, bool)]
@@ -343,16 +359,36 @@ def _lines(raw) -> list[tuple[str, list[str]]]:
 
 
 # 各個 bot 第一次啟動時的設定（之後在網頁改）。蔣寶先完全不反應，功能之後再開。
-PROFILE_SEEDS: dict[str, dict] = {
-    "jbao": {"respond": False, "bot_names": "蔣寶,jbao", "auto_reactions": "", "weather_daily_enabled": False,
-             "weather_alert_enabled": False, "passive_ack": False},
+# 每個 bot 依序套用，套過的不會再套（之後加新的一步，舊資料也會補上）。
+PROFILE_SEEDS: dict[str, list[dict]] = {
+    "jbao": [
+        {"respond": False, "bot_names": "蔣寶,jbao", "auto_reactions": "", "weather_daily_enabled": False,
+         "weather_alert_enabled": False, "passive_ack": False},
+        {"persona": "relay", "respond": True, "feature_reminder": False, "feature_note": False},
+    ],
 }
 
 
 def seed_profile(store, key: str):
-    if store.get_meta("_profile") is None:
-        store.save_settings(PROFILE_SEEDS.get(key, {}))
-        store.set_meta("_profile", key)
+    seeds = PROFILE_SEEDS.get(key, [])
+    done = store.get_meta("_profile_v")
+    if done is None:
+        done = 1 if store.get_meta("_profile") is not None else 0
+    for step in seeds[done:]:
+        store.save_settings(step)
+    store.set_meta("_profile", key)
+    store.set_meta("_profile_v", len(seeds))
+
+
+def nick_rules(settings: dict) -> list[tuple[list[str], list[str]]]:
+    out = []
+    for line in str(settings.get("nick_rules", "")).splitlines():
+        words, _, nicks = re.sub(r"[｜|]", "|", line, count=1).partition("|")
+        w = [x.strip().lower() for x in re.split(r"[/、,，]", words) if x.strip()]
+        n = [x.strip() for x in nicks.split("/") if x.strip()]
+        if w and n:
+            out.append((w, n))
+    return out
 
 
 def validate(form: dict, keys=None) -> tuple[dict, list[str]]:
@@ -377,6 +413,8 @@ def validate(form: dict, keys=None) -> tuple[dict, list[str]]:
             else:
                 errors.append(f"{k} 格式要像 07:30")
                 out[k] = default
+        elif k == "persona":
+            out[k] = raw if raw in ("assistant", "relay") else default
         elif k == "weather_slot_day":
             out[k] = raw if raw in ("auto", "today", "tomorrow") else default
         elif k == "weather_slot_hours":

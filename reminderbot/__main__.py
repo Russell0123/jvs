@@ -32,6 +32,8 @@ async def amain():
     cfg = load()
     os.makedirs(os.path.dirname(cfg.db_path) or ".", exist_ok=True)
     bots = [ReminderBot(c) for c in load_bots(cfg)]
+    for b in bots:
+        b.peers = {o.config.key: o for o in bots if o is not b}
     runner = await start_web(bots)
     try:
         await asyncio.gather(*(run_bot(b) for b in bots))

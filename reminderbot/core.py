@@ -18,8 +18,8 @@ from . import timeparse, weather
 from .router import (REMINDER_RE, Intent, clean_reminder_text, extract_wishes, fuzzy_match, purge_label, purge_scope,
                      route)
 from . import food, rules
-from .settings import (auto_reactions, find_county, phrases, split_pool, topics, wish_acks, wish_lists, wish_verb,
-                       yesno_regex)
+from .settings import (auto_reactions, find_county, nick_rules, phrases, split_pool, topics, wish_acks, wish_lists,
+                       wish_verb, yesno_regex)
 
 EVERYONE = {"help", "weather", "location"}      # 「只有主人能交代事情」也開放給所有人的
 
@@ -125,6 +125,22 @@ class Purge:
     after: int | None = None
     limit: int | None = None
     label: str = ""
+
+
+@dataclass
+class Rename:
+    """把這個 bot 在伺服器裡的暱稱改掉（None = 改回原名）。"""
+    channel_id: int
+    nick: str | None
+
+
+@dataclass
+class Handoff:
+    """把這則訊息交給另一個 bot（賈維斯）照它自己的流程處理；text 是拿掉叫這個 bot 名字之後的內容。"""
+    channel_id: int
+    message_id: int
+    text: str
+    to: str = "jvs"
 
 
 @dataclass
@@ -289,7 +305,9 @@ class Assistant:
         if not s["respond"]:
             self.last_intent = None
             return []
-        reacts = self.reactions(msg, s)
+        if s["persona"] == "relay":
+            return self._relay(msg, now, s)
+        reacts = self.reactions(msg, s) + self._rename(msg, s)
         if (back := self._food_complaint(msg, now, s)) is not None:
             return reacts + back
         rule = self._rule_for(msg, now, s)
@@ -301,6 +319,50 @@ class Assistant:
             if not out or not self.last_intent or self.last_intent.kind == "unknown":
                 self.last_intent = Intent("rule", text=rule["name"])
             out = out + self._rule_reply(rule, msg, now, s)
+        return out
+
+    # ---------- 轉介模式（蔣寶）----------
+    def _called(self, msg: Incoming, s: dict) -> tuple[bool, str]:
+        text = re.sub(r"<@[!&]?\d+>", " ", msg.text).strip()
+        return msg.mentioned or bool(re.search(self._names_re(s), text, re.I)), text
+
+    def _rename(self, msg: Incoming, s: dict) -> list:
+        """叫它時講到「改暱稱」設定的關鍵字：改自己的暱稱。"""
+        called, text = self._called(msg, s)
+        if not called:
+            return []
+        t = text.lower()
+        for words, nicks in nick_rules(s):
+            if any(w in t for w in words):
+                nick = random.Random(msg.message_id).choice(nicks)
+                return [Rename(msg.channel_id, None if nick == "原名" else nick[:32])]
+        return []
+
+    def _relay(self, msg: Incoming, now: datetime, s: dict) -> list:
+        """只做：自動按表符、改暱稱、自訂回覆；叫它交代賈維斯會的事 → 回一句官腔再 @賈維斯，讓賈維斯接手。"""
+        self.last_intent = None
+        out = self.reactions(msg, s) + self._rename(msg, s)
+        rule = self._rule_for(msg, now, s)
+        if rule and rule["mode"] == "replace":
+            self.last_intent = Intent("rule", text=rule["name"])
+            return out + self._rule_reply(rule, msg, now, s)
+        called, text = self._called(msg, s)
+        clean = self._strip_call(text, s) if called else ""
+        if clean:
+            it = route(clean, now, s)
+            task = it.kind not in ("unknown", "help")
+            if not task and (self._food_asked(clean, s) or ((pat := yesno_regex(s)) and pat.search(clean))):
+                it, task = Intent("food" if self._food_asked(clean, s) else "yesno"), True
+            if task:
+                from .explain import describe
+                label = (describe(it, self.tz) or {}).get("label", "這件事")
+                rng = random.Random(msg.message_id or int(now.timestamp()))
+                line = self.phrase(s, "handoff_phrases", rng, 任務=label)
+                self.last_intent = Intent("handoff", text=label)
+                out += self._reply(msg, f"{line} {{jvs}}") + [Handoff(msg.channel_id, msg.message_id, clean)]
+        if rule:
+            self.last_intent = self.last_intent or Intent("rule", text=rule["name"])
+            out += self._rule_reply(rule, msg, now, s)
         return out
 
     def reactions(self, msg: Incoming, s: dict) -> list:
@@ -1211,7 +1273,7 @@ class Assistant:
 
     def tick(self, now: datetime, default_channel_id: int | None = None) -> list:
         s = self.store.settings()
-        if not s["respond"]:
+        if not s["respond"] or s["persona"] == "relay":
             return []
         ts = int(now.timestamp())
         rng = random.Random(ts)

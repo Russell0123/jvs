@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from reminderbot import config, images
+from reminderbot import config, images, rules
 from reminderbot.config import Config
-from reminderbot.core import Assistant, Incoming, User
+from reminderbot.core import Assistant, Handoff, Incoming, Rename, Send, User
 from reminderbot.settings import seed_profile, wish_lists
 from reminderbot.store import MemoryStore, SqliteStore
 from reminderbot.web import make_app
@@ -35,17 +35,67 @@ def test_load_bots(tmp_path, monkeypatch):
     assert config.load_bots(main)[1].channel_ids == {1}                    # 沒填頻道就跟賈維斯一樣
 
 
-def test_jbao_silent_by_default():
+def jbao_core():
     store = MemoryStore()
     seed_profile(store, "jbao")
-    core = Assistant(store, TZ, owner_id=7)
-    for t in ["蔣寶", "蔣寶 明天提醒我交報告", "雞巴", "蔣寶 我要吃什麼"]:
-        assert core.handle(Incoming(ME, t, 1, 5, mentioned=True), NOW) == [], t
-    assert core.tick(NOW.replace(hour=8, minute=5), 1) == []
-    store.save_settings({"respond": True})                                  # 之後在網頁打開
-    assert core.handle(Incoming(ME, "蔣寶", 1, 6, mentioned=False), NOW)
-    seed_profile(store, "jbao")                                             # 只在第一次種設定
-    assert store.settings()["respond"] is True
+    return Assistant(store, TZ, owner_id=7), store
+
+
+def test_jbao_relay_handoff():
+    core, store = jbao_core()
+    pool = store.settings()["handoff_phrases"].splitlines()
+    ming = User(8, "小明")
+    for i, t in enumerate(["蔣寶 明天下午3點提醒我交報告", "蔣寶今天天氣如何", "蔣寶 我要吃什麼", "蔣寶 我要不要去運動"]):
+        out = core.handle(Incoming(ming, t, 1, 50 + i, mentioned=False), NOW)      # 誰叫都一樣
+        [r, h] = out
+        assert isinstance(r, Send) and r.reply_to == 50 + i and r.text.endswith(" {jvs}"), t
+        assert r.text[:-6] in pool and isinstance(h, Handoff) and h.message_id == 50 + i and "蔣寶" not in h.text
+    assert not store.user_reminders(8) and not store.all_notes()                       # 自己不建提醒
+    # 沒交代事情、沒叫它、只是聊天：都不理
+    for t, called in [("蔣寶", False), ("蔣寶 你好帥", False), ("我要吃什麼", False), ("雞巴", False)]:
+        assert core.handle(Incoming(ming, t, 1, 60, mentioned=called), NOW) == [], t
+    assert core.tick(NOW.replace(hour=8, minute=5), 1) == []                            # 不發天氣、不提醒
+
+
+def test_jbao_handoff_phrase_task_variable():
+    core, store = jbao_core()
+    store.save_settings({"handoff_phrases": "{任務}的事我會盯緊"})
+    [r, _] = core.handle(Incoming(ME, "蔣寶 明天天氣", 1, 5, mentioned=False), NOW)
+    assert r.text == "天氣的事我會盯緊 {jvs}"
+
+
+def test_jbao_custom_rules_still_work():
+    core, store = jbao_core()
+    rule, _ = rules.from_form({"name": "x", "on": "on", "call": "no", "words": "市長", "replies": "我在"}, 1)
+    rules.save(store, [rule])
+    [r] = core.handle(Incoming(ME, "市長在嗎", 1, 5, mentioned=False), NOW)
+    assert r.text == "我在"
+
+
+def test_rename():
+    core, store = jbao_core()
+    store.save_settings({"nick_rules": "市長/柯文哲｜蔣市長/蔣萬安\n下台｜原名"})
+    out = core.handle(Incoming(ME, "蔣寶 你是市長", 1, 5, mentioned=False), NOW)
+    assert [type(a) for a in out] == [Rename] and out[0].nick in ("蔣市長", "蔣萬安")
+    [a] = core.handle(Incoming(ME, "蔣寶 下台", 1, 6, mentioned=False), NOW)
+    assert a.nick is None
+    assert core.handle(Incoming(ME, "市長好", 1, 7, mentioned=False), NOW) == []          # 沒叫它不改
+    # 賈維斯也能設
+    jvs = Assistant(MemoryStore(), TZ, owner_id=7)
+    jvs.store.save_settings({"nick_rules": "鋼鐵人｜J.A.R.V.I.S."})
+    out = jvs.handle(Incoming(ME, "賈維斯 鋼鐵人", 1, 8, mentioned=False), NOW)
+    assert any(isinstance(a, Rename) and a.nick == "J.A.R.V.I.S." for a in out)
+
+
+def test_seed_steps_apply_once_and_upgrade_old():
+    store = MemoryStore()
+    store.set_meta("_profile", "jbao")                       # 舊版只套過第一步
+    store.save_settings({"respond": False})
+    seed_profile(store, "jbao")
+    assert store.settings()["persona"] == "relay" and store.settings()["respond"]
+    store.save_settings({"respond": False})                  # 之後自己關掉，不會被蓋回來
+    seed_profile(store, "jbao")
+    assert store.settings()["respond"] is False
 
 
 def test_migrate_lists():
@@ -81,14 +131,20 @@ async def test_web_switch_bots(tmp_path):
         html = await (await client.get("/")).text()
         assert "name='respond' checked" in html and "title='蔣寶'" in html and "href='/b/jbao/'" in html
         html = await (await client.get("/b/jbao/")).text()
-        assert "name='respond' checked" not in html and "href='/b/jbao/rules'" in html
+        assert "href='/b/jbao/rules'" in html and "name='nick_rules'" in html
+        assert "/b/jbao/reminders" not in html and "/b/jbao/food" not in html and "name='greet_words'" not in html
         assert "action='/b/jbao/'" in html and "data-base='/b/jbao'" in html
         assert "<a href='/' class='' title='賈維斯'>" in html                   # 在蔣寶頁面也點得回賈維斯
         assert "href='/b/jbao/' class='on' title='蔣寶'" in html
         # 存蔣寶的設定只動蔣寶
-        r = await client.post("/b/jbao/", data={"respond": "on", "bot_names": "蔣寶"}, allow_redirects=False)
+        r = await client.post("/b/jbao/", data={"respond": "on", "bot_names": "蔣寶", "nick_rules": "市長｜蔣市長"},
+                              allow_redirects=False)
         assert r.status == 303 and r.headers["Location"].startswith("/b/jbao/")
         assert bots[1].store.settings()["respond"] and bots[1].store.settings()["bot_names"] == "蔣寶"
+        assert bots[1].store.settings()["nick_rules"] == "市長｜蔣市長"
+        assert bots[1].store.settings()["persona"] == "relay"                              # 存設定不會改掉模式
+        html = await (await client.get("/b/jbao/replies")).text()
+        assert "name='handoff_phrases'" in html and "name='confirm_phrases'" not in html
         assert bots[0].store.settings()["bot_names"] != "蔣寶"
         # 舊網址的圖片頁改到預設回覆
         r = await client.get("/b/jbao/images", allow_redirects=False)
@@ -97,3 +153,45 @@ async def test_web_switch_bots(tmp_path):
         assert (await (await client.get("/healthz")).json())["bots"] == {"jvs": True, "jbao": True}
     finally:
         await client.close()
+
+
+async def test_adapter_handoff_and_mention():
+    from reminderbot.bot import ReminderBot
+    got = []
+
+    class Peer:
+        user = SimpleNamespace(id=999)
+
+        async def take_over(self, message, text):
+            got.append((message.id, text))
+    me = SimpleNamespace(peers={"jvs": Peer()})
+    assert ReminderBot._peer_mention(me, "放心 {jvs}") == "放心 <@999>"
+    assert ReminderBot._peer_mention(SimpleNamespace(peers={}), "放心 {jvs}") == "放心 賈維斯"
+    await ReminderBot._handoff(me, Handoff(1, 42, "明天提醒我交報告"), SimpleNamespace(id=42))
+    assert got == [(42, "明天提醒我交報告")]
+
+
+async def test_take_over_runs_jarvis_flow_on_own_message():
+    """賈維斯接手：用自己的連線重抓訊息，當作有人叫它，照平常流程回覆原本那個人。"""
+    from reminderbot.bot import ReminderBot
+    store = MemoryStore()
+    core = Assistant(store, TZ, owner_id=7)
+    own_msg = SimpleNamespace(id=42, author=SimpleNamespace(id=8, display_name="小明", name="ming", roles=[]),
+                              channel=SimpleNamespace(id=1), mentions=[], role_mentions=[])
+    ran = []
+
+    async def fetch_message(mid):
+        return own_msg
+
+    async def channel(cid):
+        return SimpleNamespace(fetch_message=fetch_message)
+
+    async def run_actions(actions, source=None):
+        ran.append((actions, source))
+    fake = SimpleNamespace(is_ready=lambda: True, _listens_in=lambda c: True, _channel=channel, core=core,
+                           now=lambda: NOW, run_actions=run_actions, config=SimpleNamespace(name="賈維斯"))
+    jbao_msg = SimpleNamespace(id=42, channel=SimpleNamespace(id=1))
+    await ReminderBot.take_over(fake, jbao_msg, "今天天氣如何")
+    [(actions, source)] = ran
+    assert source is own_msg                                        # 回覆用的是賈維斯自己抓的訊息
+    assert actions and actions[0].reply_to == 42                    # 小明還沒說在哪：先問他在哪

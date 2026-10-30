@@ -13,7 +13,7 @@ from discord.ext import tasks
 
 from . import images, weather
 from .config import Config
-from .core import Assistant, Button, Edit, Incoming, NeedWeather, Purge, React, Send, User
+from .core import Assistant, Button, Edit, Handoff, Incoming, NeedWeather, Purge, React, Rename, Send, User
 from .settings import seed_profile
 from .store import SqliteStore
 
@@ -148,6 +148,7 @@ class ReminderBot(discord.Client):
         self._tasks: set = set()         # 背景的天氣查詢
         self._monitoring = False         # 天氣變化檢查還在跑就不重複開
         self._purging: set[int] = set()  # 正在刪訊息的頻道
+        self.peers: dict = {}            # 同一支程式裡的其他 bot（代號 → bot），轉介用
 
     def now(self) -> datetime:
         return datetime.now(self.tz)
@@ -273,10 +274,54 @@ class ReminderBot(discord.Client):
             await interaction.response.send_message(self.emo(a.text, interaction.guild), ephemeral=True, **kwargs)
 
     # ---------- 收訊息 ----------
+    def _listens_in(self, channel_id: int) -> bool:
+        return channel_id in self.config.channel_ids or self.store.settings()["all_channels"]
+
+    async def take_over(self, message: discord.Message, text: str):
+        """別的 bot（蔣寶）把這則訊息交過來：當作有人直接叫賈維斯講 text，照平常流程回覆原本那個人。"""
+        if not self.is_ready() or not self._listens_in(message.channel.id):
+            return
+        try:
+            # 交過來的訊息物件綁的是蔣寶的連線，用它回覆會變成蔣寶在講話；用賈維斯自己的連線重抓一次
+            message = await (await self._channel(message.channel.id)).fetch_message(message.id)
+        except discord.HTTPException:
+            log.warning("%s 讀不到要接手的訊息（要有讀取訊息歷史的權限）", self.config.name)
+            return
+        incoming = Incoming(
+            author=to_user(message.author), text=text, channel_id=message.channel.id, message_id=message.id,
+            mention_user_ids=[u.id for u in message.mentions if not u.bot],
+            mention_role_ids=[r.id for r in message.role_mentions if not r.is_bot_managed()],
+            mentioned=True)
+        try:
+            await self.run_actions(self.core.handle(incoming, self.now()), source=message)
+        except Exception:
+            log.exception("接手訊息失敗：%s", text)
+
+    async def _handoff(self, a: Handoff, source: discord.Message | None):
+        peer = self.peers.get(a.to)
+        if peer is not None and source is not None:
+            await peer.take_over(source, a.text)
+
+    async def _rename(self, a: Rename, source: discord.Message | None):
+        guild = source.guild if source is not None else getattr(await self._channel(a.channel_id), "guild", None)
+        if guild is None:
+            return
+        try:
+            await guild.me.edit(nick=a.nick)
+        except discord.Forbidden:
+            log.warning("%s 沒有「更改暱稱」權限，改不了暱稱", self.config.name)
+
+    def _peer_mention(self, text: str | None) -> str | None:
+        """說法裡的 {jvs} → @賈維斯（賈維斯沒在跑就寫名字）。"""
+        if not text or "{jvs}" not in text:
+            return text
+        peer = self.peers.get("jvs")
+        return text.replace("{jvs}", f"<@{peer.user.id}>" if peer is not None and peer.user else "賈維斯")
+
     async def on_message(self, message: discord.Message):
         if message.author.bot:
             return
-        if message.channel.id not in self.config.channel_ids and not self.store.settings()["all_channels"]:
+        if not self._listens_in(message.channel.id):
             return
         # 回覆 bot 的訊息也算在跟 bot 講話（回覆時文字裡不會有 @，但 Discord 會帶上「回覆的是哪則」）
         replied = await self._replied_bot_message_id(message)
@@ -424,6 +469,10 @@ class ReminderBot(discord.Client):
                     await self._weather(a, source)
                 elif isinstance(a, React):
                     await self._react(a, source)
+                elif isinstance(a, Rename):
+                    await self._rename(a, source)
+                elif isinstance(a, Handoff):
+                    await self._handoff(a, source)
             except discord.HTTPException:
                 log.exception("動作失敗：%s", a)
 
@@ -441,10 +490,11 @@ class ReminderBot(discord.Client):
             else:
                 log.warning("圖片檔不見了：%s（到設定網頁的圖片頁重新上傳）", a.image)
         if source is not None and a.reply_to == source.id:
-            msg = await source.reply(self.emo(a.text, source.guild) or None, mention_author=False, **kwargs)
+            msg = await source.reply(self.emo(self._peer_mention(a.text), source.guild) or None, mention_author=False,
+                                     **kwargs)
         else:
             channel = await self._channel(a.channel_id)
-            text = self.emo(a.text, getattr(channel, "guild", None)) or None
+            text = self.emo(self._peer_mention(a.text), getattr(channel, "guild", None)) or None
             if a.reply_to:
                 kwargs["reference"] = discord.MessageReference(message_id=a.reply_to, channel_id=channel.id,
                                                                fail_if_not_exists=False)

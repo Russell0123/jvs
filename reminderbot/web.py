@@ -17,7 +17,8 @@ from .explain import describe, rules as logic_rules
 from .core import IMG_TOKEN, NO_IMAGE
 from .router import route
 from .settings import (COUNTIES, DEFAULTS, FOOD_GROUPS, FOOD_KEYS, GROUPS, LABELS, MULTILINE_KEYS, REACTION_GROUPS,
-                       REACTION_KEYS, REPLY_GROUPS, REPLY_KEYS, SETTING_KEYS, note_categories, validate, wish_lists)
+                       REACTION_KEYS, RELAY_REPLY_GROUPS, RELAY_SETTING_GROUPS, REPLY_GROUPS, REPLY_KEYS, SETTING_KEYS,
+                       note_categories, validate, wish_lists)
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +112,8 @@ NAV_ITEMS = [("記憶", [("reminders", "/reminders", "提醒"), ("notes", "/note
                      ("reactions", "/reactions", "表情符號")]),
              ("設定", [("settings", "/", "設定"), ("logic", "/logic", "判斷")])]
 
+RELAY_PAGES = {"replies", "rules", "reactions", "settings"}     # 蔣寶這種轉介模式只用到這些
+
 PAGE_JS = """<script>
 (() => {
   const B = document.body.dataset.base || "";
@@ -153,9 +156,11 @@ def page(title: str, active: str, body: str, flash: str = "", error: bool = Fals
     prefix = nav["prefix"]
     rail = "".join(f"<a href='{pre or ''}/' class='{'on' if key == nav['key'] else ''}' title='{escape(name)}'>"
                    f"{escape(name[:1])}</a>" for key, name, pre in nav["bots"]) or "<a class='on'>賈</a>"
+    shown = RELAY_PAGES if nav.get("persona") == "relay" else None
     side = "".join(f"<div class='cat'>{cat}</div>" + "".join(
-        f"<a href='{href}' class='{'on' if key == active else ''}'>{name}</a>" for key, href, name in items)
-        for cat, items in NAV_ITEMS)
+        f"<a href='{href}' class='{'on' if key == active else ''}'>{name}</a>" for key, href, name in items
+        if shown is None or key in shown)
+        for cat, items in NAV_ITEMS if shown is None or any(k in shown for k, _, _ in items))
     fl = f'<div class="flash{" err" if error else ""}">{flash}</div>' if flash else ""
     upd = ("<form class='upd' method='post' action='/update' onsubmit=\"return confirm('更新到 GitHub 上最新的版本？"
            "會重新啟動，大約 1 分鐘；新版起不來會自動退回。')\"><a id='updinfo' href='/update'></a>"
@@ -202,7 +207,8 @@ def make_app(bots) -> web.Application:
         prefix = prefixes[current.config.key]
         CURRENT.set(current)
         NAV.set({"prefix": prefix, "bots": rail, "key": current.config.key,
-                 "name": getattr(current.config, "name", current.config.key)})
+                 "name": getattr(current.config, "name", current.config.key),
+                 "persona": current.store.settings().get("persona", "assistant")})
         try:
             return await guarded(request, handler)
         except web.HTTPRedirection as e:
@@ -249,9 +255,14 @@ def make_app(bots) -> web.Application:
             out[i] = u.display_name if u else bot.store.get_meta(f"uname:{i}") or str(i)
         return out
 
+    def relay() -> bool:
+        return bot.store.settings().get("persona") == "relay"
+
     def form_page(kind: str, flash: str = "", error: bool = False, extra: str = ""):
         title, groups, path = PAGES[kind]
         s = bot.store.settings()
+        if relay() and kind in RELAY_FORMS:
+            groups, extra = RELAY_FORMS[kind], ""
         intro = {"replies": REPLY_HELP, "food": food_summary(s), "reactions": REACTION_HELP}.get(kind, "")
         return page(title, kind, intro + render_form(s, groups, path, kind == "settings", tall=kind == "food") + extra,
                     flash, error)
@@ -293,7 +304,7 @@ def make_app(bots) -> web.Application:
 
     async def save(request: web.Request, kind: str):
         form = await request.post()
-        keys = KEYS[kind]
+        keys = [k for _, ks in RELAY_FORMS[kind] for k in ks] if relay() and kind in RELAY_FORMS else KEYS[kind]
         values, errors = validate(dict(form), keys)
         bot.store.save_settings(values)
         if errors:
@@ -304,7 +315,8 @@ def make_app(bots) -> web.Application:
         raise web.HTTPSeeOther(PAGES[kind][2] + "?ok=saved")
 
     async def reset(request: web.Request, kind: str):
-        bot.store.save_settings({k: DEFAULTS[k] for k in KEYS[kind]})
+        keys = [k for _, ks in RELAY_FORMS[kind] for k in ks] if relay() and kind in RELAY_FORMS else KEYS[kind]
+        bot.store.save_settings({k: DEFAULTS[k] for k in keys if k != "respond"})
         raise web.HTTPSeeOther(PAGES[kind][2] + "?ok=saved")
 
     async def food_page(request: web.Request):
@@ -810,6 +822,7 @@ RULES_JS = """<script>
 
 PAGES = {"settings": ("設定", GROUPS, "/"), "replies": ("預設回覆", REPLY_GROUPS, "/replies"),
          "food": ("吃什麼", FOOD_GROUPS, "/food"), "reactions": ("表情符號", REACTION_GROUPS, "/reactions")}
+RELAY_FORMS = {"settings": RELAY_SETTING_GROUPS, "replies": RELAY_REPLY_GROUPS}
 KEYS = {"settings": SETTING_KEYS, "replies": REPLY_KEYS, "food": FOOD_KEYS, "reactions": REACTION_KEYS}
 REACTION_HELP = ("<p class='tag'>看到關鍵字就幫那則訊息按表符，不管有沒有叫它。一行一組「關鍵字/關鍵字｜表符 表符」，"
                  "[ ] 裡的字任一個都算，例如 [雞機][吧巴]；表符寫 :名稱: 或直接放 emoji。比對前會去掉空白和標點。</p>")
