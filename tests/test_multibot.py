@@ -83,6 +83,8 @@ async def test_web_switch_bots(tmp_path):
         html = await (await client.get("/b/jbao/")).text()
         assert "name='respond' checked" not in html and "href='/b/jbao/rules'" in html
         assert "action='/b/jbao/'" in html and "data-base='/b/jbao'" in html
+        assert "<a href='/' class='' title='賈維斯'>" in html                   # 在蔣寶頁面也點得回賈維斯
+        assert "href='/b/jbao/' class='on' title='蔣寶'" in html
         # 存蔣寶的設定只動蔣寶
         r = await client.post("/b/jbao/", data={"respond": "on", "bot_names": "蔣寶"}, allow_redirects=False)
         assert r.status == 303 and r.headers["Location"].startswith("/b/jbao/")

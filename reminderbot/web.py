@@ -163,13 +163,14 @@ def page(title: str, active: str, body: str, flash: str = "", error: bool = Fals
     html = (f"<!doctype html><html lang='zh-Hant'><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
             f"<title>{escape(title)}・{escape(nav['name'] or 'jvs')}</title><style>{CSS}</style></head>"
-            f"<body data-base='{prefix}'><div class='app'><nav class='rail'>{rail}</nav>"
+            f"<body data-base='{prefix}'><div class='app'><nav class='rail'>\x00RAIL\x00</nav>"
             f"<aside class='side'><div class='side-head'>{escape(nav['name'] or '賈維斯')}</div><nav>{side}</nav></aside>"
             f"<div class='col'><header class='top'><span class='hash'>#</span><b>{escape(title)}</b>"
             f"<span class='sp'></span>{upd}</header>"
             f"<main><div class='inner'>{fl}{body}</div></main></div></div>{PAGE_JS}</body></html>")
-    if prefix:      # 在別的 bot 底下：站內連結都加上 /b/<代號>
+    if prefix:      # 在別的 bot 底下：站內連結都加上 /b/<代號>（最左邊切換 bot 的連結除外）
         html = re.sub(r"""((?:href|action|src)=['"])/(?!/|b/)""", rf"\1{prefix}/", html)
+    html = html.replace("\x00RAIL\x00", rail)
     return web.Response(text=html, content_type="text/html")
 
 
