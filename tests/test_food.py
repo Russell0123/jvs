@@ -102,3 +102,33 @@ async def test_web_food_page(tmp_path):
         assert len(food.parse_library(store.settings()["food_library"])[0]) == 112
     finally:
         await client.close()
+
+
+def _finish_quiz(core, who):
+    [r] = core.handle(Incoming(who, "賈維斯 我要吃什麼", 1, 9, mentioned=False), NOW)
+    sid = r.buttons[0].custom_id.split(":")[2]
+    for arg in ["2", "0", "7", "3", "3"]:          # 隨便吃、100內、感覺不知道、怎麼吃不知道、冷熱不知道
+        res = core.press(f"rem:food:{sid}:{arg}", who, NOW, 1)
+    assert "幫我選一個" in [b.label for b in res.buttons]
+
+
+def test_complaint_after_result():
+    core = Assistant(MemoryStore(), TZ, owner_id=7)
+    pool = ["吃屎", "媽的問題一堆欸"]
+    _finish_quiz(core, MING)
+    assert core.handle(Incoming(ME, "我不想吃", 1, 10, mentioned=False), NOW) == []     # 別人說的不算
+    assert core.handle(Incoming(MING, "嗯", 1, 11, mentioned=False), NOW) == []
+    [r] = core.handle(Incoming(MING, "這些我都不想吃", 1, 12, mentioned=False), NOW)
+    assert r.text in pool and r.reply_to == 12
+    assert core.handle(Incoming(MING, "難吃", 1, 13, mentioned=False), NOW) == []       # 回過一次就不再盯
+
+
+def test_complaint_only_next_three():
+    core = Assistant(MemoryStore(), TZ, owner_id=7)
+    _finish_quiz(core, MING)
+    for i in range(3):
+        assert core.handle(Incoming(MING, f"好喔{i}", 1, 20 + i, mentioned=False), NOW) == []
+    assert core.handle(Incoming(MING, "討厭", 1, 30, mentioned=False), NOW) == []        # 第 4 則不管
+    _finish_quiz(core, MING)
+    later = NOW + timedelta(minutes=31)
+    assert core.handle(Incoming(MING, "難吃", 1, 31, mentioned=False), later) == []      # 超過 30 分鐘不管

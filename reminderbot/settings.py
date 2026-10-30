@@ -47,6 +47,8 @@ DEFAULTS: dict = {
     "food_questions": DEFAULT_QUESTIONS,
     "food_library": DEFAULT_LIBRARY,
     "food_result_phrases": "🍱 推薦這幾個：\n🍱 可以考慮：\n🍱 這幾個不錯：",
+    "food_reject_words": "不想吃/不吃/別的/討厭/難吃/不好吃/不要/換一個/換別的/吃膩/不喜歡/不愛/沒興趣/不想要",
+    "food_reject_phrases": "吃屎\n媽的問題一堆欸",
     "food_pick_phrases": "就決定是 {food}！\n吃 {food} 吧\n{food}，走",
     "yesno_phrases": "要\n要啊\n當然要\n再考慮看看\n先不要\n不要好了",
     "greet_phrases": "嘿\n提到我嗎？\n？\n您好\n咪嗚\n{時段}，{名字}\n{時段}～外面{天氣}",
@@ -157,6 +159,8 @@ LABELS = {
     "food_questions": "問題樹：一行一題「題目｜欄位｜代碼=選項／代碼=選項／不知道」，題目有「複選」就是複選；第一題分路線，之後用【代碼】分段",
     "food_library": "食物庫：一行一項「編號. 品項　路線｜價位｜感覺｜形式｜冷熱｜畫面｜爽法｜吃法」，每個字是一個標記，— 是沒有",
     "food_result_phrases": "吃什麼：推薦清單的開頭",
+    "food_reject_words": "推薦完之後，那個人接下來 3 則訊息有這些詞就回嘴，用 / 分開",
+    "food_reject_phrases": "吃什麼：推薦完還嫌東嫌西時回的",
     "food_pick_phrases": "吃什麼：按「幫我選一個」，{food} 是選到的",
     "greet_phrases": "打招呼 {時段} {名字} {天氣}", "greet_rare_phrases": "稀有招呼 {時段} {名字} {天氣}",
     "settings_link_phrases": "/設定 的說明",
@@ -230,11 +234,11 @@ REPLY_GROUPS = [
     ("常見提醒", ["topics"]),
     ("打招呼", ["greet_phrases", "greet_rare_phrases"]),
     ("問要不要", ["yesno_phrases"]),
-    ("吃什麼", ["food_result_phrases", "food_pick_phrases"]),
+    ("吃什麼", ["food_result_phrases", "food_pick_phrases", "food_reject_phrases"]),
     ("其他", ["unknown_phrases", "settings_link_phrases"]),
 ]
 # 吃什麼頁：問題樹和食物庫
-FOOD_GROUPS = [("吃什麼", ["food_triggers", "food_questions", "food_library"])]
+FOOD_GROUPS = [("吃什麼", ["food_triggers", "food_reject_words", "food_questions", "food_library"])]
 FOOD_KEYS = [k for _, keys in FOOD_GROUPS for k in keys]
 REPLY_KEYS = [k for _, keys in REPLY_GROUPS for k in keys]
 SETTING_KEYS = [k for _, keys in GROUPS for k in keys]

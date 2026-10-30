@@ -272,6 +272,8 @@ class Assistant:
         """自訂規則先比對：「取代」就只回規則的；「另外回」就原本的照做再補一則。"""
         s = self.store.settings()
         reacts = self.reactions(msg, s)
+        if (back := self._food_complaint(msg, now, s)) is not None:
+            return reacts + back
         rule = self._rule_for(msg, now, s)
         if rule and rule["mode"] == "replace":
             self.last_intent = Intent("rule", text=rule["name"])
@@ -500,10 +502,32 @@ class Assistant:
         return bool(words) and any(w in text for w in words) and "最近" not in text \
             and not re.search(REMINDER_RE, text)
 
+    def _food_watch(self, uid: int, now: datetime):
+        """推薦完之後盯著這個人接下來的 3 則訊息（30 分鐘內）。"""
+        self.store.set_meta(f"foodwatch:{uid}", {"left": 3, "at": int(now.timestamp())})
+
+    def _food_complaint(self, msg: Incoming, now: datetime, s: dict) -> list | None:
+        key = f"foodwatch:{msg.author.id}"
+        w = self.store.get_meta(key)
+        if not w:
+            return None
+        if now.timestamp() - w["at"] > 1800:
+            self.store.set_meta(key, None)
+            return None
+        words = [x.strip() for x in str(s["food_reject_words"]).split("/") if x.strip()]
+        text = re.sub(r"<[@#][!&]?\d+>", "", msg.text)
+        if any(x in text for x in words):
+            self.store.set_meta(key, None)
+            self.last_intent = Intent("food", text="嫌東嫌西")
+            return self._reply(msg, self.phrase(s, "food_reject_phrases", random.Random(msg.message_id)))
+        self.store.set_meta(key, {**w, "left": w["left"] - 1} if w["left"] > 1 else None)
+        return None
+
     def food_start(self, user: User, now: datetime) -> tuple[str, list[Button]]:
         tree, _ = food.parse_questions(self.store.settings()["food_questions"])
         if tree.first is None:
             return "吃什麼的題目還沒設好，到設定網頁的「吃什麼」頁看看。", []
+        self.store.set_meta(f"foodwatch:{user.id}", None)
         sid = int(self.store.get_meta("food_seq") or 0) + 1
         self.store.set_meta("food_seq", sid)
         self.store.set_meta(f"food:{sid - 30}", None)       # 舊的題目不留
@@ -542,6 +566,7 @@ class Assistant:
             if not sess.get("result"):
                 return PressResult(ephemeral="還沒有推薦。")
             choice = rng.choice(sess["result"])
+            self._food_watch(user.id, now)
             line = self.phrase(s, "food_pick_phrases", rng, food=f"**{choice}**")
             return PressResult(content=self._food_result_text(sess, s, rng) + f"\n\n👉 {line}",
                                buttons=[Button(f"rem:food:{sid}:again", "重來")])
@@ -570,6 +595,8 @@ class Assistant:
                 foods, _ = food.parse_library(s["food_library"])
                 sess["result"] = food.recommend(foods, tree, sess["answers"], sid * 7 + int(now.timestamp()))
                 sess["head"] = self.phrase(s, "food_result_phrases", rng)
+                if sess["result"]:
+                    self._food_watch(user.id, now)
         self.store.set_meta(f"food:{sid}", sess)
         if sess.get("result") is not None:
             if not sess["result"]:
