@@ -212,7 +212,7 @@ def test_jbao_greets():
 def test_jbao_cute_triple():
     core, store = jbao_core()
     rules.seed_rules(store, "jbao")
-    [rule] = rules.load(store)
+    rule = next(r for r in rules.load(store) if r["name"] == "可愛三連拍")
     assert rule["name"] == "可愛三連拍" and rule["send"] == "all" and rule["call"] == "yes"
     out = core.handle(Incoming(ME, "蔣寶 可愛三連拍", 1, 5, mentioned=False), NOW)
     assert out == []                                                   # 還沒放圖就不送
@@ -435,3 +435,34 @@ async def test_send_remembers_rule():
                          core=SimpleNamespace(sent=lambda *a: None))
     await botmod.ReminderBot._send(me, Send(1, "晚安市民朋友", rule_id=7), None)
     assert botmod.FROM_RULE[4242] == 7
+
+
+def test_jbao_scolded_renames_user():
+    core, store = jbao_core()
+    rules.seed_rules(store, "jbao")
+    ming = User(8, "小明")
+    out = core.handle(Incoming(ming, "蔣寶你這個白癡", 1, 5, mentioned=False), NOW)
+    [r, rn] = out
+    assert r.text == "閉嘴，你也來當蔣萬安" and r.reply_to == 5
+    assert isinstance(rn, Rename) and rn.user_id == 8 and rn.nick == "蔣萬安"
+    assert core.handle(Incoming(ming, "你這個白癡", 1, 6, mentioned=False), NOW) == []          # 沒叫蔣寶不算
+    out = core.handle(Incoming(User(555, "賈維斯"), "蔣寶 白癡", 1, 8, mentioned=False, from_bot=True), NOW)
+    assert not any(isinstance(a, Rename) for a in out)                                         # bot 講的不算
+
+
+async def test_rename_member_adapter():
+    from reminderbot.bot import ReminderBot
+    edits = []
+
+    class Member:
+        async def edit(self, nick):
+            edits.append(("member", nick))
+
+    class Me:
+        async def edit(self, nick):
+            edits.append(("me", nick))
+    guild = SimpleNamespace(me=Me(), get_member=lambda uid: Member() if uid == 8 else None)
+    fake = SimpleNamespace(config=SimpleNamespace(name="蔣寶"))
+    await ReminderBot._rename(fake, Rename(1, "蔣萬安", user_id=8), SimpleNamespace(guild=guild))
+    await ReminderBot._rename(fake, Rename(1, "蔣市長"), SimpleNamespace(guild=guild))
+    assert edits == [("member", "蔣萬安"), ("me", "蔣市長")]

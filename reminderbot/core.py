@@ -133,9 +133,10 @@ class Purge:
 
 @dataclass
 class Rename:
-    """把這個 bot 在伺服器裡的暱稱改掉（None = 改回原名）。"""
+    """改伺服器暱稱：user_id 沒給 = 改這個 bot 自己；有給 = 改那個人（None = 改回原名）。"""
     channel_id: int
     nick: str | None
+    user_id: int | None = None
 
 
 @dataclass
@@ -481,6 +482,8 @@ class Assistant:
         out = self._rule_sends(rule, msg, now, s)
         for a in out:
             a.rule_id = rule["id"]
+        if rule.get("rename_user") and not msg.from_bot:             # 把講這句話的人的暱稱改掉
+            out.append(Rename(msg.channel_id, rule["rename_user"], user_id=msg.author.id))
         return out
 
     def _rule_sends(self, rule: dict, msg: Incoming, now: datetime, s: dict) -> list:

@@ -397,10 +397,20 @@ class ReminderBot(discord.Client):
         guild = source.guild if source is not None else getattr(await self._channel(a.channel_id), "guild", None)
         if guild is None:
             return
+        if a.user_id is None:
+            try:
+                await guild.me.edit(nick=a.nick)
+            except discord.Forbidden:
+                log.warning("%s 沒有「更改暱稱」權限，改不了暱稱", self.config.name)
+            return
         try:
-            await guild.me.edit(nick=a.nick)
+            member = guild.get_member(a.user_id) or await guild.fetch_member(a.user_id)
+            await member.edit(nick=a.nick)
         except discord.Forbidden:
-            log.warning("%s 沒有「更改暱稱」權限，改不了暱稱", self.config.name)
+            log.warning("%s 改不了 %s 的暱稱：要有「管理暱稱」權限，而且 %s 的身分組要排在對方上面（伺服器擁有者改不了）",
+                        self.config.name, a.user_id, self.config.name)
+        except discord.HTTPException as e:
+            log.warning("改暱稱失敗：%s", e)
 
     def _peer_mention(self, text: str | None) -> str | None:
         """說法裡的 {jvs} → @賈維斯（賈維斯沒在跑就寫名字）。"""

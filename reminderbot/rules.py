@@ -14,7 +14,7 @@ BOTS = {"others": "會觸發，但不會被這條自己回的話觸發", "loop":
         "no": "不會觸發：只有人講的才算"}
 SEND = {"one": "隨機挑一句、一張", "all": "全部依序送出：一句／一張一則訊息"}
 BLANK = {"id": 0, "name": "", "on": True, "who": "any", "users": [], "call": "yes", "task": "any",
-         "words": "", "not_words": "", "mode": "add", "replies": "", "cooldown": 0, "send": "one", "bots": "others"}
+         "words": "", "not_words": "", "mode": "add", "replies": "", "cooldown": 0, "send": "one", "bots": "others", "rename_user": ""}
 
 
 def split_words(raw: str) -> list[str]:
@@ -47,6 +47,7 @@ def from_form(form: dict, rid: int) -> tuple[dict, list[str]]:
         "words": str(form.get("words", "")).strip(), "not_words": str(form.get("not_words", "")).strip(),
         "mode": pick("mode", MODE), "replies": str(form.get("replies", "")).replace("\r\n", "\n").strip(),
         "cooldown": cooldown, "send": pick("send", SEND), "bots": pick("bots", BOTS),
+        "rename_user": str(form.get("rename_user", "")).strip()[:32],
     }
     if rule["who"] == "list" and not users:
         errors.append("「指定的人」要填 Discord 使用者 ID")
@@ -89,13 +90,16 @@ def summary(rule: dict) -> str:
         parts.append("不含 " + "/".join(split_words(rule["not_words"])))
     return "・".join(parts) + (" → 取代" if rule["mode"] == "replace" else " → 另外回") + \
         ("・依序全部送" if rule.get("send") == "all" else "") + \
-        ("・可循環" if rule.get("bots") == "loop" else "・機器人不觸發" if rule.get("bots") == "no" else "")
+        ("・可循環" if rule.get("bots") == "loop" else "・機器人不觸發" if rule.get("bots") == "no" else "") + \
+        (f"・對方改名「{rule['rename_user']}」" if rule.get("rename_user") else "")
 
 
 # 每個 bot 預設帶的規則（第一次啟動時加進去，之後在網頁改；刪掉也不會再加回來）
 SEED_RULES: dict[str, list[dict]] = {
     "jbao": [{"name": "可愛三連拍", "call": "yes", "words": "可愛三連拍/三連拍", "mode": "replace", "send": "all",
-              "replies": ""}],
+              "replies": ""},
+             {"name": "罵蔣寶", "call": "yes", "words": "媽的/嗎的/操/肏/襙/幹你娘/你媽/白癡/垃圾/幹/爛死了/傻逼/爛/廢/笨色",
+              "mode": "replace", "replies": "閉嘴，你也來當蔣萬安", "rename_user": "蔣萬安", "bots": "no"}],
 }
 
 
