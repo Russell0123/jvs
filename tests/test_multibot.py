@@ -290,34 +290,44 @@ def test_seed_append_keeps_custom_names():
     assert store.settings()["bot_names"] == "蔣寶,小蔣,蔣萬安" and store.settings()["echo_enabled"]
 
 
-async def test_peer_messages_one_level(monkeypatch):
-    """同一支程式的 bot 互相看得到對方的訊息，但因為對方而講的話不會再被接（只連一層）。"""
+async def test_bot_message_depths(monkeypatch):
+    """bot 的訊息看層數：另一個 bot 只接 1 層；自己講的照 self_loop 接；轉介那句誰都不接。"""
     from reminderbot import bot as botmod
     monkeypatch.setattr(botmod, "PEER_WAIT", 0)
     jvs_user, jbao_user, other_bot = SimpleNamespace(id=1, bot=True), SimpleNamespace(id=2, bot=True), \
         SimpleNamespace(id=3, bot=True)
     reached = []
 
-    def listens(cid):
-        reached.append(botmod.FROM_PEER.get())
-        return False                                   # 到這裡就代表會照一般流程處理
-    me = SimpleNamespace(user=jvs_user, peers={"jbao": SimpleNamespace(user=jbao_user)}, _listens_in=listens)
-    me._is_peer = lambda u: botmod.ReminderBot._is_peer(me, u)
+    def make(user, peer_user, settings):
+        def listens(cid):
+            reached.append(botmod.CUR_DEPTH.get())
+            return False                               # 到這裡就代表會照一般流程處理
+        me = SimpleNamespace(user=user, peers={"x": SimpleNamespace(user=peer_user)}, _listens_in=listens,
+                             store=SimpleNamespace(settings=lambda: settings))
+        me._is_peer = lambda u: botmod.ReminderBot._is_peer(me, u)
+        return me
+    jvs = make(jvs_user, jbao_user, {"self_loop": 0, "listen_bots": True})
+    jbao = make(jbao_user, jvs_user, {"self_loop": 10, "listen_bots": True})
 
-    async def got(author, mid):
+    async def got(me, author, mid, depth=None):
         reached.clear()
-        msg = SimpleNamespace(author=author, id=mid, channel=SimpleNamespace(id=1))
-        await botmod.ReminderBot.on_message(me, msg)
+        if depth is not None:
+            botmod.remember_depth(mid, depth)
+        await botmod.ReminderBot.on_message(me, SimpleNamespace(author=author, id=mid, channel=SimpleNamespace(id=1)))
         return list(reached)
-    assert await got(SimpleNamespace(id=9, bot=False), 10) == [False]     # 人講的照常
-    assert await got(jbao_user, 11) == [True]                              # 蔣寶講的：賈維斯會看
-    assert await got(other_bot, 12) == []                                  # 別的 bot：不理
-    assert await got(jvs_user, 13) == []                                   # 自己講的：不理
-    botmod.NO_CHAIN.append(14)
-    assert await got(jbao_user, 14) == []                                  # 蔣寶因為賈維斯才講的：不再接
+    assert await got(jvs, SimpleNamespace(id=9, bot=False), 10) == [0]          # 人講的照常
+    assert await got(jvs, jbao_user, 11, 1) == [1]                              # 蔣寶回人的：賈維斯接
+    assert await got(jvs, jbao_user, 12, 2) == []                               # 蔣寶因為賈維斯才講的：不接
+    assert await got(jvs, other_bot, 13, 1) == []                               # 別的 bot：不理
+    assert await got(jvs, jvs_user, 14, 1) == []                                # 賈維斯不接自己
+    assert await got(jbao, jbao_user, 15, 7) == [7]                             # 蔣寶接自己，10 層以內
+    assert await got(jbao, jbao_user, 16, 11) == []
+    assert await got(jbao, jvs_user, 17, botmod.NO_CHAIN_DEPTH) == []           # 轉介那句
+    jvs.store = SimpleNamespace(settings=lambda: {"self_loop": 0, "listen_bots": False})
+    assert await got(jvs, jbao_user, 18, 1) == []                               # 關掉就不聽別的 bot
 
 
-async def test_send_marks_no_chain():
+async def test_send_records_depth():
     from reminderbot import bot as botmod
     n = iter(range(700, 800))
 
@@ -329,14 +339,36 @@ async def test_send_marks_no_chain():
     me = SimpleNamespace(_channel=channel, emo=lambda t, g=None: t, _peer_mention=lambda t: t,
                          core=SimpleNamespace(sent=lambda *a: None))
 
-    async def out(text, peer):
-        token = botmod.FROM_PEER.set(peer)
+    async def out(text, depth):
+        token = botmod.CUR_DEPTH.set(depth)
         try:
             await botmod.ReminderBot._send(me, Send(1, text), None)
         finally:
-            botmod.FROM_PEER.reset(token)
-        return botmod.NO_CHAIN[-1] if botmod.NO_CHAIN else None
-    last = await out("嘿", False)
-    assert last != 700                                       # 回人的：別的 bot 可以接
-    assert await out("嘿", True) == 701                     # 因為別的 bot 才講的：不再接
-    assert await out("放心 {jvs}", False) == 702            # 轉介那句：賈維斯已經直接接手了
+            botmod.CUR_DEPTH.reset(token)
+        return next(reversed(botmod.DEPTH.items()))
+    assert await out("嘿", 0) == (700, 1)                                     # 回人的
+    assert await out("嘿", 3) == (701, 4)                                     # 接龍下去
+    assert await out("放心 {jvs}", 0) == (702, botmod.NO_CHAIN_DEPTH)         # 轉介那句
+
+
+def test_echo_mode_add():
+    core, store = jbao_core()
+    rule, _ = rules.from_form({"name": "x", "on": "on", "call": "no", "words": "沈伯洋", "replies": "捲髮", "mode": "add"}, 9)
+    rules.save(store, [rule])
+    [r] = core.handle(Incoming(ME, "蔣寶說沈伯洋", 1, 5, mentioned=False), NOW)              # 取代：只應聲
+    assert r.text == "沈伯洋"
+    store.save_settings({"echo_mode": "add"})
+    out = core.handle(Incoming(ME, "蔣寶說沈伯洋", 1, 6, mentioned=False), NOW + timedelta(minutes=1))
+    assert [a.text for a in out] == ["沈伯洋", "捲髮"]                                       # 並存：規則也跑
+
+
+def test_unicode_emoji_names():
+    from reminderbot.bot import ReminderBot
+    me = SimpleNamespace(emojis=[])
+    assert ReminderBot.emo(me, ":milk:") == "🥛"
+    assert ReminderBot.emo(me, "好 :thumbsup::fire:") == "好 👍🔥"
+    assert ReminderBot.emo(me, ":jibar:") == ":jibar:"                   # 伺服器沒有、也不是內建：照原字
+    assert ReminderBot.emo(me, "12:30:00") == "12:30:00"
+    store = MemoryStore()
+    seed_profile(store, "jbao")
+    assert store.settings()["self_loop"] == 10

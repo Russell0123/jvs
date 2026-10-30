@@ -13,6 +13,9 @@ DEFAULTS: dict = {
     # 叫它時講到關鍵字就改自己的暱稱：一行一組「關鍵字/關鍵字｜暱稱/暱稱」（多個暱稱隨機挑，寫「原名」就改回來）
     "nick_rules": "",
     "echo_enabled": False,           # 應聲蟲：「<叫它的名字>說…」就把後面的內容講一次
+    "echo_mode": "replace",          # replace = 只應聲；add = 應聲之後其他功能照跑（自訂回覆、轉介…）
+    "listen_bots": True,             # 另一個 bot（賈維斯／蔣寶）講的話也會觸發，只接一層
+    "self_loop": 0,                  # 自己講的話也會觸發自己：最多連幾次，0 = 不會
     "feature_reminder": True,
     "feature_note": True,
     "feature_timer": True,
@@ -160,6 +163,9 @@ LABELS = {
     "yesno_patterns": "問要不要：符合這些句型就隨機回，* 代表中間任何字，用 / 分開",
     "yesno_phrases": "問要不要的回答",
     "handoff_phrases": "被叫去做賈維斯會的事時回的話，後面會自動 @賈維斯，然後賈維斯接手。可以用 {任務}，例如「提醒」「天氣」",
+    "echo_mode": "應聲之後",
+    "listen_bots": "另一個 bot 講的話也會觸發（只接一層，不會互相接龍）",
+    "self_loop": "自己講的話也會觸發自己：最多連幾次，0 = 不會",
     "echo_enabled": "應聲蟲：有人打「名字說…」（名字是「叫它」裡任何一個，或 @它）就把後面的話照講一次",
     "nick_rules": "一行一組「關鍵字/關鍵字｜暱稱/暱稱」：叫它時講到關鍵字就把自己的暱稱改掉，好幾個暱稱就隨機挑，寫「原名」就改回來",
     "food_triggers": "叫它時句子有這些詞就開始問，用 / 分開",
@@ -208,7 +214,7 @@ LABELS = {
 HINTS: dict = {}
 # 設定頁
 GROUPS = [
-    ("功能", ["respond", "feature_reminder", "feature_note", "feature_timer", "feature_weather", "feature_mention_others",
+    ("功能", ["respond", "listen_bots", "self_loop", "feature_reminder", "feature_note", "feature_timer", "feature_weather", "feature_mention_others",
             "all_channels"]),
     ("叫它", ["owner_only", "bot_names", "greet_words", "greet_rare_percent", "greet_image_percent",
             "yesno_patterns"]),
@@ -224,7 +230,7 @@ GROUPS = [
     ("清單", ["wish_lists", "wish_listen_ids", "passive_ack", "suggest_count", "suggest_half_life_days",
             "note_categories"]),
     ("改暱稱", ["nick_rules"]),
-    ("應聲蟲", ["echo_enabled"]),
+    ("應聲蟲", ["echo_enabled", "echo_mode"]),
     ("其他", ["show_exact_time"]),
 ]
 # 回覆頁：bot 會說的每一句話
@@ -253,9 +259,9 @@ REACTION_GROUPS = [("自動按表符", ["auto_reactions"])]
 REACTION_KEYS = ["auto_reactions"]
 
 # 轉介模式（蔣寶）只看得到這些
-RELAY_SETTING_GROUPS = [("功能", ["respond", "all_channels"]),
+RELAY_SETTING_GROUPS = [("功能", ["respond", "all_channels", "listen_bots", "self_loop"]),
                         ("叫它", ["bot_names", "greet_words", "greet_rare_percent", "greet_image_percent"]),
-                        ("改暱稱", ["nick_rules"]), ("應聲蟲", ["echo_enabled"])]
+                        ("改暱稱", ["nick_rules"]), ("應聲蟲", ["echo_enabled", "echo_mode"])]
 RELAY_REPLY_GROUPS = [("轉給賈維斯", ["handoff_phrases"]), ("打招呼", ["greet_phrases", "greet_rare_phrases"])]
 NICK_GROUP = ("改暱稱", ["nick_rules"])
 REPLY_KEYS = [k for _, keys in REPLY_GROUPS for k in keys]
@@ -371,6 +377,7 @@ PROFILE_SEEDS: dict[str, list[dict]] = {
          "weather_alert_enabled": False, "passive_ack": False},
         {"persona": "relay", "respond": True, "feature_reminder": False, "feature_note": False},
         {"echo_enabled": True, "bot_names+": "蔣萬安"},
+        {"self_loop": 10},
     ],
 }
 
@@ -427,6 +434,8 @@ def validate(form: dict, keys=None) -> tuple[dict, list[str]]:
                 out[k] = default
         elif k == "persona":
             out[k] = raw if raw in ("assistant", "relay") else default
+        elif k == "echo_mode":
+            out[k] = raw if raw in ("replace", "add") else default
         elif k == "weather_slot_day":
             out[k] = raw if raw in ("auto", "today", "tomorrow") else default
         elif k == "weather_slot_hours":

@@ -310,7 +310,9 @@ class Assistant:
             return self._relay(msg, now, s)
         reacts = self.reactions(msg, s) + self._rename(msg, s)
         if echo := self._parrot(msg, s):
-            return reacts + echo
+            if s["echo_mode"] != "add":
+                return reacts + echo
+            reacts += echo
         if (back := self._food_complaint(msg, now, s)) is not None:
             return reacts + back
         rule = self._rule_for(msg, now, s)
@@ -357,7 +359,9 @@ class Assistant:
         self.last_intent = None
         out = self.reactions(msg, s) + self._rename(msg, s)
         if echo := self._parrot(msg, s):
-            return out + echo
+            if s["echo_mode"] != "add":
+                return out + echo
+            out += echo
         rule = self._rule_for(msg, now, s)
         if rule and rule["mode"] == "replace":
             self.last_intent = Intent("rule", text=rule["name"])

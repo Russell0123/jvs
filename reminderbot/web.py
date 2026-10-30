@@ -835,6 +835,9 @@ REACTION_HELP = ("<p class='tag'>看到關鍵字就幫那則訊息按表符，�
                  "[ ] 裡的字任一個都算，例如 [雞機][吧巴]；表符寫 :名稱: 或直接放 emoji。比對前會去掉空白和標點。</p>")
 
 
+SELECTS = {"echo_mode": {"replace": "取代：只應聲，其他回覆都不做", "add": "並存：應聲之後自訂回覆、轉介這些照跑"}}
+
+
 def render_form(s: dict, groups, path: str, tools: bool, tall: bool = False) -> str:
     out = [f"<form method='post' action='{path}'>"]
     for title, keys in groups:
@@ -847,6 +850,10 @@ def render_form(s: dict, groups, path: str, tools: bool, tall: bool = False) -> 
             out.append(f"<label for='{k}'>{label}</label>")
             if k == "weather_county":
                 opts = "".join(f"<option {'selected' if c == v else ''}>{c}</option>" for c in COUNTIES)
+                out.append(f"<select id='{k}' name='{k}'>{opts}</select>")
+            elif k in SELECTS:
+                opts = "".join(f"<option value='{c}' {'selected' if c == v else ''}>{escape(n)}</option>"
+                               for c, n in SELECTS[k].items())
                 out.append(f"<select id='{k}' name='{k}'>{opts}</select>")
             elif k in MULTILINE_KEYS:
                 rows = min(30 if tall else 8, max(2, str(v).count("\n") + 1))
