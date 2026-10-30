@@ -20,6 +20,8 @@ log = logging.getLogger(__name__)
 
 PINGS = discord.AllowedMentions(everyone=False, users=True, roles=True, replied_user=False)
 NO_PINGS = discord.AllowedMentions.none()
+# 說法裡的 :duzi: → <:duzi:ID>（bot 送 :名字: 不會自己變表情）；<:x:1>、<a:x:1>、12:30:00 不會被動到
+EMOJI_RE = re.compile(r"(?<![<\w])[:：]([A-Za-z0-9_]{2,32})[:：](?!\d)")
 STYLES = {"success": discord.ButtonStyle.success, "danger": discord.ButtonStyle.danger,
           "secondary": discord.ButtonStyle.secondary}
 
@@ -230,13 +232,14 @@ class ReminderBot(discord.Client):
                                   target_id=target.id if target else None)
         for a in actions:
             if a.ephemeral:
-                await interaction.followup.send(a.text, ephemeral=True)
+                await interaction.followup.send(self.emo(a.text, interaction.guild), ephemeral=True)
                 continue
             file = discord.File(io.BytesIO(await upload.read()), filename=upload.filename) if upload else None
             if file is None and (p := images.path_of(images.folder(self.config.db_path), self.core.resolve_image(a.image))):
                 file = discord.File(p)
             kwargs = {"file": file} if file else {}
-            await target.reply(a.text or None, mention_author=False, allowed_mentions=NO_PINGS, **kwargs)
+            await target.reply(self.emo(a.text, target.guild) or None, mention_author=False, allowed_mentions=NO_PINGS,
+                               **kwargs)
 
     async def _slash(self, interaction: discord.Interaction, name: str, arg: str = ""):
         actions = self.core.slash(name, to_user(interaction.user), self.now(), interaction.channel_id or 0, arg,
@@ -255,12 +258,12 @@ class ReminderBot(discord.Client):
                 actions = self.core.weather_error(nw, str(e))
             for a in actions:
                 kwargs = {"embed": make_embed(a.embed)} if a.embed else {}
-                await interaction.followup.send(a.text or None, ephemeral=True, **kwargs)
+                await interaction.followup.send(self.emo(a.text, interaction.guild) or None, ephemeral=True, **kwargs)
             return
         for a in actions:
             view = make_view(a.buttons)
             kwargs = {"view": view} if view else {}
-            await interaction.response.send_message(a.text, ephemeral=True, **kwargs)
+            await interaction.response.send_message(self.emo(a.text, interaction.guild), ephemeral=True, **kwargs)
 
     # ---------- 收訊息 ----------
     async def on_message(self, message: discord.Message):
@@ -303,6 +306,17 @@ class ReminderBot(discord.Client):
         return msg.id if msg.author.id == self.user.id else None
 
     # ---------- 執行 core 回傳的動作 ----------
+    def emo(self, text: str | None, guild: discord.Guild | None = None) -> str | None:
+        """把 :名字: 換成伺服器自訂表情；先找這個伺服器的，再找 bot 在的其他伺服器，找不到就原樣。"""
+        if not text or ":" not in text:
+            return text
+
+        def sub(m):
+            name = m.group(1)
+            e = (guild and discord.utils.get(guild.emojis, name=name)) or discord.utils.get(self.emojis, name=name)
+            return str(e) if e else m.group(0)
+        return EMOJI_RE.sub(sub, text)
+
     async def _channel(self, channel_id: int):
         return self.get_channel(channel_id) or await self.fetch_channel(channel_id)
 
@@ -316,7 +330,7 @@ class ReminderBot(discord.Client):
                     msg = await ch.fetch_message(a.message_id)
                     content = f"~~{msg.content}~~" if a.strike else msg.content
                     if a.append:
-                        content = f"{content}\n{a.append}"
+                        content = f"{content}\n{self.emo(a.append, msg.guild)}"
                     await msg.edit(content=content, view=None if a.clear_buttons else discord.utils.MISSING)
                 elif isinstance(a, NeedWeather):
                     await self._weather(a, source)
@@ -333,11 +347,11 @@ class ReminderBot(discord.Client):
             kwargs["embed"] = make_embed(a.embed)
         if a.image and (p := images.path_of(images.folder(self.config.db_path), self.core.resolve_image(a.image))):
             kwargs["file"] = discord.File(p)
-        text = a.text or None
         if source is not None and a.reply_to == source.id:
-            msg = await source.reply(text, mention_author=False, **kwargs)
+            msg = await source.reply(self.emo(a.text, source.guild) or None, mention_author=False, **kwargs)
         else:
             channel = await self._channel(a.channel_id)
+            text = self.emo(a.text, getattr(channel, "guild", None)) or None
             if a.reply_to:
                 kwargs["reference"] = discord.MessageReference(message_id=a.reply_to, channel_id=channel.id,
                                                                fail_if_not_exists=False)
@@ -401,13 +415,13 @@ class ReminderBot(discord.Client):
             return await self.open_edit_menu(interaction)
         if res.ephemeral:
             view = make_view(res.ephemeral_buttons)
-            return await interaction.response.send_message(res.ephemeral, ephemeral=True,
+            return await interaction.response.send_message(self.emo(res.ephemeral, interaction.guild), ephemeral=True,
                                                            **({"view": view} if view else {}))
         content = interaction.message.content
         if res.strike:
             content = f"~~{content}~~"
         if res.append:
-            content = f"{content}\n{res.append}"
+            content = f"{content}\n{self.emo(res.append, interaction.guild)}"
         await interaction.response.edit_message(content=content, view=None)
         if res.actions:
             await self.run_actions(res.actions)
