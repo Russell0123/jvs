@@ -868,3 +868,36 @@ def test_weather_for_everyone(core):
     assert chat.say(User(9, "阿華"), "好喔", mentioned=False) == [] and not core.knows_location(9)
     [s] = core.slash("weather", User(9, "阿華"), T0, CH)
     assert "還不知道你在哪" in s.text
+
+
+async def test_web_replace_lost_image(tmp_path):
+    from aiohttp import FormData
+    cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path=str(tmp_path / "l.db"), tz=TZ,
+                 web_host="127.0.0.1", web_port=0, admin_email="", web_password="", owner_id=7,
+                 reminder_channel_id=1)
+    store = SqliteStore(cfg.db_path)
+    core = Assistant(store, TZ, owner_id=7)
+    bot = SimpleNamespace(config=cfg, tz=TZ, store=store, core=core, get_user=lambda i: None)
+    client = TestClient(TestServer(make_app(bot)))
+    await client.start_server()
+    try:
+        form = FormData()
+        form.add_field("files", PNG, filename="a.png", content_type="image/png")
+        await client.post("/images/greet/upload", data=form)
+        [name] = core.images("greet")
+        code = core.image_code(f"greet/{name}")
+        (tmp_path / "images" / "greet" / name).unlink()                       # 檔案被刪掉了
+        html = await (await client.get("/images")).text()
+        assert "檔案不見了" in html and f"/images/greet/{name}/replace" in html
+        gif = b"GIF89a" + b"0" * 20
+        form = FormData()
+        form.add_field("files", gif, filename="b.gif", content_type="image/gif")
+        r = await client.post(f"/images/greet/{name}/replace", data=form, allow_redirects=False)
+        assert r.status == 303
+        [new] = core.images("greet")
+        assert new.endswith(".gif") and new.split(".")[0] == name.split(".")[0]
+        assert core.resolve_image("#" + code) == f"greet/{new}"                # 代碼不變
+        assert (tmp_path / "images" / "greet" / new).read_bytes() == gif
+        assert "檔案不見了" not in await (await client.get("/images")).text()
+    finally:
+        await client.close()

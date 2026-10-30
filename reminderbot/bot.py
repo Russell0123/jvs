@@ -435,8 +435,11 @@ class ReminderBot(discord.Client):
             kwargs["view"] = view
         if a.embed:
             kwargs["embed"] = make_embed(a.embed)
-        if a.image and (p := images.path_of(images.folder(self.config.db_path), self.core.resolve_image(a.image))):
-            kwargs["file"] = discord.File(p)
+        if a.image:
+            if p := images.path_of(images.folder(self.config.db_path), self.core.resolve_image(a.image)):
+                kwargs["file"] = discord.File(p)
+            else:
+                log.warning("圖片檔不見了：%s（到設定網頁的圖片頁重新上傳）", a.image)
         if source is not None and a.reply_to == source.id:
             msg = await source.reply(self.emo(a.text, source.guild) or None, mention_author=False, **kwargs)
         else:

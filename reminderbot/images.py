@@ -43,8 +43,8 @@ def path_of(root: Path, ref: str) -> Path | None:
     return p if p.is_file() else None
 
 
-def save(root: Path, group: str, data: bytes) -> str:
-    """存一張圖，回新檔名；不是圖片或太大就丟 ValueError。"""
+def save(root: Path, group: str, data: bytes, stem: str = "") -> str:
+    """存一張圖，回新檔名；stem 有給就沿用那個檔名（換副檔名）。不是圖片或太大就丟 ValueError。"""
     if not valid_group(group):
         raise ValueError("沒有這個分組")
     if len(data) > MAX_BYTES:
@@ -52,7 +52,7 @@ def save(root: Path, group: str, data: bytes) -> str:
     ext = kind(data)
     if not ext:
         raise ValueError("不是 png/jpg/gif/webp")
-    name = f"{int(time.time())}{secrets.token_hex(3)}{ext}"
+    name = (stem if re.fullmatch(r"\w+", stem) else f"{int(time.time())}{secrets.token_hex(3)}") + ext
     (root / group).mkdir(parents=True, exist_ok=True)
     (root / group / name).write_bytes(data)
     return name

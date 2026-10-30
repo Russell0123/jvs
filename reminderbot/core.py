@@ -433,6 +433,14 @@ class Assistant:
         for n in names:
             self.image_code(f"{group}/{n}")
 
+    def replace_image(self, group: str, old: str, new: str):
+        """檔案換了一張（例如檔案不見了重新上傳），清單位置和代碼都不變。"""
+        allimg = self.store.get_meta("images") or {}
+        allimg[group] = [new if n == old else n for n in allimg.get(group, [])]
+        self.store.set_meta("images", allimg)
+        codes = {c: (f"{group}/{new}" if r == f"{group}/{old}" else r) for c, r in self.image_codes().items()}
+        self.store.set_meta("imgcodes", codes)
+
     def image_codes(self) -> dict:
         """代碼 → 「分組/檔名」。每張圖上傳時配一個數字代碼，說法裡寫 {圖:代碼} 就會附那張。"""
         return self.store.get_meta("imgcodes") or {}

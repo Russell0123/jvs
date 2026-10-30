@@ -19,7 +19,8 @@ id -u "$APP_USER" >/dev/null 2>&1 || useradd --system --home "$APP_DIR" --shell 
 echo "==> 複製程式到 $APP_DIR"
 mkdir -p "$APP_DIR"
 if [[ "$SRC_DIR" != "$APP_DIR" ]]; then
-  rsync -a --delete --exclude .venv --exclude .env --exclude 'data/*.db*' --exclude data/backups \
+  # data/ 整個不動：資料庫、備份、上傳的圖片都在裡面（--delete 會把 repo 裡沒有的檔案刪掉）
+  rsync -a --delete --exclude .venv --exclude .env --exclude /data/ \
     "$SRC_DIR"/ "$APP_DIR"/ 2>/dev/null || cp -r "$SRC_DIR"/. "$APP_DIR"/
 fi
 mkdir -p "$APP_DIR/data/backups"

@@ -25,7 +25,7 @@ CSS = """
 :root{--bg:#f6f7f9;--card:#fff;--fg:#1d2330;--muted:#6b7280;--line:#e3e6eb;--accent:#5865f2;--danger:#d14343}
 @media (prefers-color-scheme:dark){:root{--bg:#16181d;--card:#1f2229;--fg:#e6e8ec;--muted:#9aa1ad;--line:#2e323b;--accent:#7b85ff;--danger:#ff6b6b}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,"Noto Sans TC","PingFang TC",sans-serif}
-header{background:var(--card);border-bottom:1px solid var(--line);padding:12px 16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+header{background:var(--card);border-bottom:1px solid var(--line);padding:12px 16px;display:flex;gap:16px;align-items:center}header nav{display:flex;overflow-x:auto;white-space:nowrap;min-width:0;scrollbar-width:none}
 header b{font-size:17px}nav a{color:var(--muted);text-decoration:none;margin-right:14px}nav a.on{color:var(--accent);font-weight:600}
 main{max-width:860px;margin:0 auto;padding:16px}
 section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
@@ -43,6 +43,8 @@ th{color:var(--muted);font-weight:500;white-space:nowrap}.wrap table{min-width:6
 .filters{display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:10px}.filters a{color:var(--muted)}.rowform{display:flex;gap:6px;align-items:center;margin:0 0 6px}.rowform input[type=text]{flex:1;min-width:8em}.rowform select{width:auto}.filters a.on{color:var(--accent);font-weight:600}
 .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px}.gallery figure{margin:0}
 .gallery .code{display:block;background:none;border:0;padding:0 0 4px;color:var(--muted);font:12px ui-monospace,monospace;cursor:pointer}.gallery .code[data-ok]{color:var(--accent)}
+.gallery .lost{aspect-ratio:1;border:1px dashed var(--line);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-size:12px;color:var(--muted);margin-bottom:4px}
+.gallery .lost label{cursor:pointer;color:var(--accent);border:1px solid var(--accent);border-radius:6px;padding:3px 8px}.gallery .lost input{display:none}
 .gallery img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:block;margin-bottom:4px}
 """
 
@@ -307,6 +309,10 @@ def make_app(bot) -> web.Application:
         out = [f"<p class='tag'>打招呼時從對應的分組隨機挑一張附上，附圖機率 {escape(str(s['greet_image_percent']))}%"
                "，在「設定 → 叫它」改。稀有招呼沒放圖就不附。<br>每張圖下面的代碼（例如 {圖:3}）按一下就複製，"
                "貼到回覆或規則的句子後面，那句就一定配那張圖。</p>"]
+        lost = sum(1 for g in images.GROUPS for n in bot.core.images(g) if not images.path_of(img_root, f"{g}/{n}"))
+        if lost and not flash:
+            flash = (f"⚠️ 有 {lost} 張圖的檔案不見了。在那張的位置按「重新上傳」選一張圖就好，"
+                     "代碼不變，回覆裡的 {圖:代碼} 不用改。")
         for g, gname in images.GROUPS.items():
             names = bot.core.images(g)
             empty = ("<p class='tag'>沒放圖時用這張預設的：</p><div class='gallery'><figure>"
@@ -317,13 +323,22 @@ def make_app(bot) -> web.Application:
 
     def gallery(group: str, names: list[str], back: str) -> str:
         q = f"?back={back}" if back else ""
-        tiles = "".join(
-            f"<figure><img src='/images/{group}/{escape(n, quote=True)}' loading='lazy' alt=''>"
-            f"<button type='button' class='code' title='複製代碼' onclick=\"navigator.clipboard.writeText(this.textContent);"
-            f"this.dataset.ok=1\">{{圖:{bot.core.image_code(f'{group}/{n}')}}}</button>"
-            f"<form method='post' action='/images/{group}/{escape(n, quote=True)}/delete{q}' "
-            f"onsubmit=\"return confirm('刪掉這張？')\"><button class='ghost small'>刪除</button></form></figure>"
-            for n in names)
+        def tile(n: str) -> str:
+            en = escape(n, quote=True)
+            if images.path_of(img_root, f"{group}/{n}"):
+                pic = f"<img src='/images/{group}/{en}' loading='lazy' alt=''>"
+            else:       # 檔案不見了：原位置重新上傳，代碼不變
+                pic = (f"<form class='lost' method='post' action='/images/{group}/{en}/replace{q}' "
+                       f"enctype='multipart/form-data'><span>⚠️ 檔案不見了</span>"
+                       f"<label class='ghost small'>重新上傳<input type='file' name='files' "
+                       f"accept='image/png,image/jpeg,image/gif,image/webp' required onchange='this.form.submit()'>"
+                       f"</label></form>")
+            return (f"<figure>{pic}<button type='button' class='code' title='複製代碼' "
+                    f"onclick=\"navigator.clipboard.writeText(this.textContent);this.dataset.ok=1\">"
+                    f"{{圖:{bot.core.image_code(f'{group}/{n}')}}}</button>"
+                    f"<form method='post' action='/images/{group}/{en}/delete{q}' "
+                    f"onsubmit=\"return confirm('刪掉這張？')\"><button class='ghost small'>刪除</button></form></figure>")
+        tiles = "".join(tile(n) for n in names)
         return (f"<form class='rowform' method='post' action='/images/{group}/upload{q}' enctype='multipart/form-data'>"
                 f"<input type='file' name='files' accept='image/png,image/jpeg,image/gif,image/webp' multiple required>"
                 f"<button class='small'>上傳</button></form>" + (f"<div class='gallery'>{tiles}</div>" if tiles else ""))
@@ -358,6 +373,22 @@ def make_app(bot) -> web.Application:
         if errors:
             raise web.HTTPSeeOther(back_to(request, group, urlencode({"err": "沒存到 " + "；".join(errors)})))
         raise web.HTTPSeeOther(back_to(request, group, f"ok={len(added)}"))
+
+    async def image_replace(request: web.Request):
+        group, name = request.match_info["group"], request.match_info["name"]
+        if not images.valid_group(group) or name not in bot.core.images(group):
+            raise web.HTTPNotFound()
+        reader = await request.multipart()
+        part = await reader.next()
+        try:
+            data = bytes(await part.read(decode=False)) if part is not None else b""
+            new = images.save(img_root, group, data, stem=name.rsplit(".", 1)[0])
+        except ValueError as e:
+            raise web.HTTPSeeOther(back_to(request, group, urlencode({"err": f"沒存到：{e}"})))
+        if new != name:
+            images.delete(img_root, group, name)
+            bot.core.replace_image(group, name, new)
+        raise web.HTTPSeeOther(back_to(request, group, "ok=1"))
 
     async def image_delete(request: web.Request):
         group, name = request.match_info["group"], request.match_info["name"]
@@ -477,6 +508,7 @@ def make_app(bot) -> web.Application:
         web.post(r"/rules/{id:\d+}/delete", rule_delete), web.post(r"/rules/{id:\d+}/up", rule_up),
         web.get("/images", images_page), web.post(r"/images/{group}/upload", image_upload),
         web.get(r"/images/{group}/{name}", image_file), web.post(r"/images/{group}/{name}/delete", image_delete),
+        web.post(r"/images/{group}/{name}/replace", image_replace),
         web.get("/logic", logic_page), web.get("/healthz", health),
     ])
     return app
