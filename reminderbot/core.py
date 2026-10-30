@@ -309,6 +309,8 @@ class Assistant:
         if s["persona"] == "relay":
             return self._relay(msg, now, s)
         reacts = self.reactions(msg, s) + self._rename(msg, s)
+        if echo := self._parrot(msg, s):
+            return reacts + echo
         if (back := self._food_complaint(msg, now, s)) is not None:
             return reacts + back
         rule = self._rule_for(msg, now, s)
@@ -339,10 +341,23 @@ class Assistant:
                 return [Rename(msg.channel_id, None if nick == "原名" else nick[:32])]
         return []
 
+    def _parrot(self, msg: Incoming, s: dict) -> list:
+        """應聲蟲：「蔣萬安說今天放假」「@蔣寶 說…」→ 在頻道講「今天放假」（@ 都不會真的 tag 到人）。"""
+        if not s["echo_enabled"]:
+            return []
+        m = re.match(rf"^\s*(?:<@[!&]?\d+>\s*)*(?:({self._names_re(s)})\s*)?說[\s:：,，、]*(.+)$", msg.text, re.S | re.I)
+        if not m or not (m.group(1) or msg.mentioned) or not m.group(2).strip():
+            return []
+        said = m.group(2).strip()
+        self.last_intent = Intent("echo", text=said)
+        return [Send(msg.channel_id, said[:2000])]
+
     def _relay(self, msg: Incoming, now: datetime, s: dict) -> list:
         """只做：自動按表符、改暱稱、自訂回覆、打招呼；叫它交代賈維斯會的事 → 回一句官腔再 @賈維斯，讓賈維斯接手。"""
         self.last_intent = None
         out = self.reactions(msg, s) + self._rename(msg, s)
+        if echo := self._parrot(msg, s):
+            return out + echo
         rule = self._rule_for(msg, now, s)
         if rule and rule["mode"] == "replace":
             self.last_intent = Intent("rule", text=rule["name"])

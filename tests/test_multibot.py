@@ -263,3 +263,28 @@ async def test_jbao_replies_page_has_says_gallery(tmp_path):
         assert "builtin/stark.png" in await (await client.get("/replies")).text()
     finally:
         await client.close()
+
+
+def test_jbao_echo():
+    core, store = jbao_core()
+    assert "蔣萬安" in store.settings()["bot_names"] and "蔣寶" in store.settings()["bot_names"]
+    ming = User(8, "小明")
+    cases = [("蔣萬安說今天放假", "今天放假", False), ("蔣寶說：台北第一", "台北第一", False), ("jbao說 hi", "hi", False),
+             ("<@555> 說 我是市長", "我是市長", True), ("蔣萬安說 <@123> 好帥", "<@123> 好帥", False)]
+    for i, (t, said, m) in enumerate(cases):
+        [r] = core.handle(Incoming(ming, t, 1, 90 + i, mentioned=m), NOW)
+        assert r.text == said and r.reply_to is None, t
+    for t in ["蔣萬安說", "我覺得蔣萬安說的對", "他說好"]:                  # 沒內容、不是開頭、不是叫它：不理
+        assert core.handle(Incoming(ming, t, 1, 99, mentioned=False), NOW) == [], t
+    jvs = Assistant(MemoryStore(), TZ, owner_id=7)                      # 賈維斯預設沒開
+    out = jvs.handle(Incoming(ming, "賈維斯說今天放假", 1, 5, mentioned=False), NOW)
+    assert not any(isinstance(a, Send) and a.text == "今天放假" for a in out)
+
+
+def test_seed_append_keeps_custom_names():
+    store = MemoryStore()
+    store.set_meta("_profile", "jbao")
+    store.set_meta("_profile_v", 2)
+    store.save_settings({"bot_names": "蔣寶,小蔣"})
+    seed_profile(store, "jbao")
+    assert store.settings()["bot_names"] == "蔣寶,小蔣,蔣萬安" and store.settings()["echo_enabled"]

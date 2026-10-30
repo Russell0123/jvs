@@ -12,6 +12,7 @@ DEFAULTS: dict = {
     "persona": "assistant",          # assistant = 賈維斯那套；relay = 只做自訂回覆、表符、改暱稱，交代事情轉給賈維斯
     # 叫它時講到關鍵字就改自己的暱稱：一行一組「關鍵字/關鍵字｜暱稱/暱稱」（多個暱稱隨機挑，寫「原名」就改回來）
     "nick_rules": "",
+    "echo_enabled": False,           # 應聲蟲：「<叫它的名字>說…」就把後面的內容講一次
     "feature_reminder": True,
     "feature_note": True,
     "feature_timer": True,
@@ -159,6 +160,7 @@ LABELS = {
     "yesno_patterns": "問要不要：符合這些句型就隨機回，* 代表中間任何字，用 / 分開",
     "yesno_phrases": "問要不要的回答",
     "handoff_phrases": "被叫去做賈維斯會的事時回的話，後面會自動 @賈維斯，然後賈維斯接手。可以用 {任務}，例如「提醒」「天氣」",
+    "echo_enabled": "應聲蟲：有人打「名字說…」（名字是「叫它」裡任何一個，或 @它）就把後面的話照講一次",
     "nick_rules": "一行一組「關鍵字/關鍵字｜暱稱/暱稱」：叫它時講到關鍵字就把自己的暱稱改掉，好幾個暱稱就隨機挑，寫「原名」就改回來",
     "food_triggers": "叫它時句子有這些詞就開始問，用 / 分開",
     "food_questions": "問題樹：一行一題「題目｜欄位｜代碼=選項／代碼=選項／不知道」，題目有「複選」就是複選；第一題分路線，之後用【代碼】分段",
@@ -222,6 +224,7 @@ GROUPS = [
     ("清單", ["wish_lists", "wish_listen_ids", "passive_ack", "suggest_count", "suggest_half_life_days",
             "note_categories"]),
     ("改暱稱", ["nick_rules"]),
+    ("應聲蟲", ["echo_enabled"]),
     ("其他", ["show_exact_time"]),
 ]
 # 回覆頁：bot 會說的每一句話
@@ -252,7 +255,7 @@ REACTION_KEYS = ["auto_reactions"]
 # 轉介模式（蔣寶）只看得到這些
 RELAY_SETTING_GROUPS = [("功能", ["respond", "all_channels"]),
                         ("叫它", ["bot_names", "greet_words", "greet_rare_percent", "greet_image_percent"]),
-                        ("改暱稱", ["nick_rules"])]
+                        ("改暱稱", ["nick_rules"]), ("應聲蟲", ["echo_enabled"])]
 RELAY_REPLY_GROUPS = [("轉給賈維斯", ["handoff_phrases"]), ("打招呼", ["greet_phrases", "greet_rare_phrases"])]
 NICK_GROUP = ("改暱稱", ["nick_rules"])
 REPLY_KEYS = [k for _, keys in REPLY_GROUPS for k in keys]
@@ -367,6 +370,7 @@ PROFILE_SEEDS: dict[str, list[dict]] = {
         {"respond": False, "bot_names": "蔣寶,jbao", "auto_reactions": "", "weather_daily_enabled": False,
          "weather_alert_enabled": False, "passive_ack": False},
         {"persona": "relay", "respond": True, "feature_reminder": False, "feature_note": False},
+        {"echo_enabled": True, "bot_names+": "蔣萬安"},
     ],
 }
 
@@ -377,7 +381,13 @@ def seed_profile(store, key: str):
     if done is None:
         done = 1 if store.get_meta("_profile") is not None else 0
     for step in seeds[done:]:
-        store.save_settings(step)
+        cur, values = store.settings(), {}
+        for k, v in step.items():
+            if k.endswith("+"):         # 「key+」= 加在原本的值後面（逗號分開、不重複），不蓋掉自己改過的
+                k = k[:-1]
+                v = ",".join(dict.fromkeys(x.strip() for x in f"{cur[k]},{v}".split(",") if x.strip()))
+            values[k] = v
+        store.save_settings(values)
     store.set_meta("_profile", key)
     store.set_meta("_profile_v", len(seeds))
 
