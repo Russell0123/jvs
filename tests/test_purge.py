@@ -123,3 +123,28 @@ async def test_purge_count_and_very_old():
     sent = await run_purge(chan, Purge(1, None, 4, "最近 4 則"))
     assert [m.deleted for m in msgs] == [False, False, False, False, True, True, True, True]
     assert sent[-1].endswith("共 4 則。")
+
+
+def test_scope_phrasings():
+    from reminderbot.router import purge_label, purge_scope
+    now = NOW.replace(hour=21, minute=5)
+    cases = {"清空七點後的訊息": "今天 19:00 之後", "清空早上七點後的訊息": "今天 07:00 之後",
+             "刪掉19:30以後的訊息": "今天 19:30 之後", "清空十一點後的訊息": "今天 11:00 之後",
+             "清空晚上十一點後": "昨天 23:00 之後", "清空昨天晚上八點開始的訊息": "昨天 20:00 之後",
+             "清空最近一百個訊息": "最近 100 則", "刪掉100筆訊息": "最近 100 則", "清空一小時內的訊息": "近 1 小時",
+             "清空半小時內的訊息": "近 30 分鐘", "清空一個月內的訊息": "近 30 天", "清空這個頻道": "所有"}
+    for text, label in cases.items():
+        code = purge_scope(text, now)
+        assert code and purge_label(code, TZ).replace(now.strftime("%m/%d"), "今天") == label, (text, code)
+    assert purge_scope("清空 12345 的訊息", now) is None                    # 有數字但看不懂：不要當成全部
+
+
+def test_clock_after_deletes_from_that_time():
+    c = core()
+    now = NOW.replace(hour=21, minute=5)
+    [r] = c.handle(Incoming(ME, "賈維斯 清空七點後的訊息", 1, 5, mentioned=False), now)
+    code = r.buttons[0].custom_id.split(":")[3]
+    [p] = c.press(f"rem:purge:7:{code}", ME, now, 1).actions
+    assert p.after == int(now.replace(hour=19, minute=0).timestamp()) and p.limit is None and "19:00" in p.label
+    [r] = c.handle(Incoming(ME, "賈維斯 清空 12345 的訊息", 1, 6, mentioned=False), now)
+    assert "看不懂" in r.text and not r.buttons

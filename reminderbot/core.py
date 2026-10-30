@@ -671,7 +671,9 @@ class Assistant:
                 return say_("還沒有圖，先到設定網頁「預設回覆」最下面的 says 圖庫上傳一張。")
             return [Send(channel_id, arg[:2000], reply_to=target_id, image=image), *say_("👌")]
         if name == "purge":
-            code = purge_scope(arg) or ("all" if not arg.strip() else None)
+            code = purge_scope(arg, now) if arg.strip() else "all"
+            if code == "all" and arg.strip() and not re.search(r"全|所有|整個|清空|清光", arg):
+                code = None                     # /清除 的範圍只有一句：看不懂就問，不要當成全部
             if code is None:
                 return say_("範圍看不懂，例如：全部、近7天、今天、最近50則。")
             return say_(*self.purge_confirm(user, code))
@@ -818,7 +820,7 @@ class Assistant:
             return "要先在主機的 .env 設 OWNER_ID 才能用這個。", []
         if user.id != self.owner_id:
             return self.phrase(self.store.settings(), "unknown_phrases", random.Random()), []
-        return (f"要刪掉這個頻道{purge_label(code)}的訊息嗎？釘選的會留著，刪了就救不回來。",
+        return (f"要刪掉這個頻道{purge_label(code, self.tz)}的訊息嗎？釘選的會留著，刪了就救不回來。",
                 [Button(f"rem:purge:{user.id}:{code}", "刪除", style="danger"), Button(f"rem:purgeno:{user.id}", "算了")])
 
     def _purge_action(self, code: str, now: datetime, channel_id: int | None) -> Purge:
@@ -827,13 +829,17 @@ class Assistant:
         after = {"t": midnight, "y": midnight - timedelta(days=1), "w": midnight - timedelta(days=local.weekday()),
                  "m": midnight.replace(day=1)}.get(code)
         limit = None
-        if code[:1] == "d":
+        if code[:1] == "a" and code[1:].isdigit():
+            after = datetime.fromtimestamp(int(code[1:]), self.tz)
+        elif code[:1] == "i":
+            after = local - timedelta(minutes=int(code[1:]))
+        elif code[:1] == "d":
             after = local - timedelta(days=int(code[1:]))
         elif code[:1] == "h":
             after = local - timedelta(hours=int(code[1:]))
         elif code[:1] == "n":
             limit = int(code[1:])
-        return Purge(channel_id or 0, int(after.timestamp()) if after else None, limit, purge_label(code))
+        return Purge(channel_id or 0, int(after.timestamp()) if after else None, limit, purge_label(code, self.tz))
 
     def _reply_to_reminder(self, msg: Incoming, text: str, now: datetime, s: dict, rng) -> list | None:
         """回覆了 bot 的某則提醒訊息（不用 @）：取消、完成或延後「那一個」。不是這幾種就照一般判斷。"""
@@ -897,6 +903,8 @@ class Assistant:
         if it.kind == "help":
             return reply(HELP)
         if it.kind == "purge":
+            if it.text == "?":
+                return reply("範圍看不懂，可以說：七點後、近一小時、最近 100 則、今天、全部。")
             text, buttons = self.purge_confirm(msg.author, it.text)
             return reply(text, buttons)
 

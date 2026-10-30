@@ -132,16 +132,58 @@ class Intent:
     topic: str = ""                 # 常見提醒（休息、喝水…），回覆和觸發用固定說法
 
 
-def purge_scope(text: str) -> str | None:
-    """「近七天」→ d7、「近 2 小時」→ h2、「最近 50 則」→ n50、「今天」→ t、「全部／所有」→ all；看不出來回 None。"""
-    if m := re.search(rf"(?:近|最近|過去|前)\s*({NUM})?\s*(個)?\s*(天|日|小時|鐘頭|週|周|星期|禮拜|則|條|篇|封)", text):
-        n = cn2int(m.group(1)) if m.group(1) else 1
-        unit = m.group(3)
-        if unit in ("則", "條", "篇", "封"):
+PERIODS = {"早上": 0, "上午": 0, "凌晨": 0, "半夜": 0, "清晨": 0, "中午": 12, "下午": 12, "傍晚": 12, "晚上": 12}
+
+
+def _clock_after(text: str, now: datetime) -> datetime | None:
+    """「七點後」「晚上 7 點之後」「19:30 以後」「昨天晚上八點開始」→ 那個時間；沒講早晚就取最近一次。"""
+    m = re.search(rf"(今天|今日|昨天|昨日|昨晚)?\s*(早上|上午|凌晨|半夜|清晨|中午|下午|傍晚|晚上)?\s*({NUM})\s*(?:點|時|:|：)"
+                  rf"\s*(半|({NUM})\s*分?)?\s*(?:鐘)?\s*(?:後|之後|以後|開始|起|到現在|以來)", text)
+    if not m:
+        return None
+    h = cn2int(m.group(3))
+    mi = 30 if m.group(4) == "半" else (cn2int(m.group(5)) if m.group(5) else 0)
+    if h is None or not 0 <= h <= 24 or not 0 <= (mi or 0) < 60:
+        return None
+    day = now.date() - timedelta(days=1) if m.group(1) in ("昨天", "昨日", "昨晚") else now.date()
+    period = m.group(2) or ("晚上" if m.group(1) == "昨晚" else None)
+    if period:
+        hours = [(h % 12) + PERIODS[period] if not (period == "中午" and h == 12) else 12]
+        if period in ("凌晨", "半夜") and h == 12:
+            hours = [0]
+    else:
+        hours = [h % 24] if h >= 12 else [h, h + 12]
+    cands = [datetime.combine(day, time(hh % 24, mi), now.tzinfo) for hh in hours]
+    past = [c for c in cands if c <= now]
+    if past:
+        return max(past)
+    return max(cands) - timedelta(days=1)          # 還沒到：是昨天的那個時間
+
+
+def purge_scope(text: str, now: datetime | None = None) -> str | None:
+    """刪訊息的範圍：
+    「七點後」→ a<時間戳>、「近 30 分鐘」→ i30、「一小時內」→ h1、「近七天」→ d7、「最近 100 則／一百個」→ n100、
+    「今天」→ t、「昨天」→ y、「這週」→ w、「這個月」→ m、沒講範圍或「全部」→ all。
+    有講數字或時間但看不懂 → None（寧可問，也不要刪錯）。"""
+    now = now or datetime.now().astimezone()
+    if at := _clock_after(text, now):
+        return f"a{int(at.timestamp())}"
+    if re.search(r"半\s*(?:個)?\s*(?:小時|鐘頭)", text):
+        return "i30"
+    if m := re.search(rf"({NUM})?\s*(?:個)?\s*(分鐘|分|小時|鐘頭|天|日|週|周|星期|禮拜|月)\s*(?:內|以內|之內|來)?", text):
+        pre = text[:m.start()]
+        if m.group(1) or re.search(r"(近|最近|過去|前)\s*$", pre):
+            n = cn2int(m.group(1)) if m.group(1) else 1
+            unit = m.group(2)
+            if n:
+                if unit in ("分鐘", "分"):
+                    return f"i{n}"
+                if unit in ("小時", "鐘頭"):
+                    return f"h{n}"
+                return f"d{n * 30 if unit == '月' else n * 7 if unit in ('週', '周', '星期', '禮拜') else n}"
+    if m := re.search(rf"({NUM})\s*(?:則|條|篇|封|個|筆|句)", text):
+        if n := cn2int(m.group(1)):
             return f"n{n}"
-        if unit in ("小時", "鐘頭"):
-            return f"h{n}"
-        return f"d{n * 7 if unit in ('週', '周', '星期', '禮拜') else n}"
     if re.search(r"今天|今日", text):
         return "t"
     if re.search(r"昨天|昨日", text):
@@ -150,17 +192,24 @@ def purge_scope(text: str) -> str | None:
         return "w"
     if re.search(r"(這|本)(個)?月", text):
         return "m"
-    if re.search(r"所有|全部|全都|整個|全\S{0,2}訊息|清空|清光|刪光", text):
+    if re.search(r"所有|全部|全都|整個|全\S{0,2}訊息", text):
         return "all"
-    return None
+    if re.search(rf"(\d|{NUM}\s*(?:點|時|則|條|個|筆|分|天|週|周|月|:|：))", text):
+        return None                                  # 有數字、時間，但上面都對不上
+    return "all"
 
 
-def purge_label(code: str) -> str:
+def purge_label(code: str, tz=None) -> str:
     if code == "all":
         return "所有"
     if code in ("t", "y", "w", "m"):
         return {"t": "今天", "y": "昨天到現在", "w": "這週", "m": "這個月"}[code]
-    unit = {"d": "天", "h": "小時", "n": "則"}[code[0]]
+    if code[0] == "a":
+        at = datetime.fromtimestamp(int(code[1:]), tz)
+        today = datetime.now(tz).date()
+        day = "今天" if at.date() == today else "昨天" if at.date() == today - timedelta(days=1) else at.strftime("%m/%d")
+        return f"{day} {at:%H:%M} 之後"
+    unit = {"d": "天", "h": "小時", "i": "分鐘", "n": "則"}[code[0]]
     return f"{'最近' if code[0] == 'n' else '近'} {code[1:]} {unit}"
 
 
@@ -177,7 +226,7 @@ def route(text: str, now: datetime, settings: dict) -> Intent:
         return Intent("help")
 
     if re.search(PURGE_VERB_RE, text) and re.search(PURGE_OBJ_RE, text) and not re.search(PURGE_NOT_RE, text):
-        return Intent("purge", text=purge_scope(text) or "all")
+        return Intent("purge", text=purge_scope(text, now) or "?")
 
     if m := re.search(PAYDAY_SET_RE, text):
         if not re.search(REMINDER_RE, text):
