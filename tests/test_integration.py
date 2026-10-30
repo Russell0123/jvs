@@ -825,3 +825,18 @@ def test_auto_reactions(core):
     assert reacts("賈維斯 雞巴", mentioned=True) == [":jibar:"]              # 叫它的也照按，回覆照回
     core.store.save_settings({"auto_reactions": "好耶/[讚贊]｜👍 :yay:\n好耶｜🎉"})
     assert reacts("好 耶！") == ["👍", ":yay:", "🎉"] and reacts("贊") == ["👍", ":yay:"]
+
+
+def test_yesno(core):
+    core.owner_id = 7
+    pool = core.store.settings()["yesno_phrases"].splitlines()
+    chat = Chat(core)
+    for i, t in enumerate(["賈維斯我要吃飯嗎", "賈維斯 我要不要買那個", "賈維斯，要去睡覺嗎？"]):
+        [(_, r)] = chat.say(MING, t, now=T0 + timedelta(minutes=i), mentioned=False)   # 不是主人也回
+        assert r.text in pool and core.last_intent.kind == "yesno", t
+    out = chat.say(ME, "賈維斯 明天要下雨嗎", mentioned=False)                        # 天氣照舊
+    assert isinstance(out[0][1], NeedWeather)
+    assert chat.say(ME, "我要吃飯嗎", mentioned=False) == []                           # 沒叫它不回
+    core.store.save_settings({"yesno_patterns": "該*嗎", "yesno_phrases": "該"})
+    [(_, r)] = chat.say(MING, "賈維斯 我該睡了嗎", mentioned=False)
+    assert r.text == "該"

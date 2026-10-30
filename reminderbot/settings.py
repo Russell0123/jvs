@@ -16,7 +16,8 @@ DEFAULTS: dict = {
     "bot_names": "賈維斯,賈維思,賈維絲,假維斯,加維斯,賈威斯,傑維斯,jarvis,jvs",   # 講到這些名字就算在叫它
     "greet_words": "嗨,嘿,hi,hey,hello,哈囉,你好,您好,早安,午安,晚安,安安,yo",
     "greet_rare_percent": 5,         # 打招呼時有幾 % 機率回「稀有」那句
-    "greet_image_percent": 100,      # 打招呼時附圖的機率（圖庫有圖才會附）
+    "greet_image_percent": 100,
+    "yesno_patterns": "要*嗎/要不要",  # 叫它時句子符合就隨機回「要／再考慮看看」這類；* = 中間任何字，用 / 分開      # 打招呼時附圖的機率（圖庫有圖才會附）
 
     # bot 的口吻：一行一句，每次隨機挑，最近用過的 3 句不會馬上再用
     # 規則：短句（3～12 字）、不重述你說的內容、不加括號說明
@@ -40,6 +41,7 @@ DEFAULTS: dict = {
     "nice_advice": "天氣不錯，適合出門。\n{day}很舒服。\n出去走走吧。",
     "done_phrases": "👍\n好～\n辛苦了",
     "edit_phrases": "好，改好了。\n改好了👌\nOK，更新了。",
+    "yesno_phrases": "要\n要啊\n當然要\n再考慮看看\n先不要\n不要好了",
     "greet_phrases": "嘿\n提到我嗎？\n？\n您好\n咪嗚\n{時段}，{名字}\n{時段}～外面{天氣}",
     "greet_rare_phrases": "史塔克的肛門",
     "settings_link_phrases": "設定在這裡：",
@@ -141,6 +143,8 @@ LABELS = {
     "all_channels": "所有頻道都回應（提醒發到提醒頻道）",
     "owner_only": "只有主人能叫它做事", "bot_names": "叫它的名字（逗號分隔，含錯字）",
     "greet_words": "打招呼的字（逗號分隔）", "greet_rare_percent": "稀有招呼機率 %", "greet_image_percent": "打招呼附圖機率 %（圖片頁上傳）",
+    "yesno_patterns": "問要不要：符合這些句型就隨機回，* 代表中間任何字，用 / 分開",
+    "yesno_phrases": "問要不要的回答",
     "greet_phrases": "打招呼 {時段} {名字} {天氣}", "greet_rare_phrases": "稀有招呼 {時段} {名字} {天氣}",
     "settings_link_phrases": "/設定 的說明",
     "confirm_phrases": "一般", "confirm_when_phrases": "照著講時間 {when}", "confirm_other_phrases": "提醒別人 {who}",
@@ -182,7 +186,8 @@ HINTS: dict = {}
 GROUPS = [
     ("功能", ["feature_reminder", "feature_note", "feature_timer", "feature_weather", "feature_mention_others",
             "all_channels"]),
-    ("叫它", ["owner_only", "bot_names", "greet_words", "greet_rare_percent", "greet_image_percent"]),
+    ("叫它", ["owner_only", "bot_names", "greet_words", "greet_rare_percent", "greet_image_percent",
+            "yesno_patterns"]),
     ("按鈕", ["btn_done_label", "btn_later_label", "btn_later_minutes", "btn_tomorrow_label", "btn_tomorrow_time",
             "btn_stop_label"]),
     ("時間", ["date_only_time", "time_morning", "time_noon", "time_afternoon", "time_evening", "time_night",
@@ -211,6 +216,7 @@ REPLY_GROUPS = [
             "alert_phrases", "location_phrases", "weather_wait_phrases"]),
     ("常見提醒", ["topics"]),
     ("打招呼", ["greet_phrases", "greet_rare_phrases"]),
+    ("問要不要", ["yesno_phrases"]),
     ("其他", ["unknown_phrases", "settings_link_phrases"]),
 ]
 REPLY_KEYS = [k for _, keys in REPLY_GROUPS for k in keys]
@@ -283,6 +289,13 @@ def keyword_regex(word: str) -> str:
     for m in re.finditer(r"\[([^\]]+)\]|(.)", word.lower()):
         out.append("[" + "".join(re.escape(c) for c in m.group(1)) + "]" if m.group(1) else re.escape(m.group(2)))
     return "".join(out)
+
+
+def yesno_regex(settings: dict) -> re.Pattern | None:
+    """「要*嗎/要不要」→ regex；* 和 … 代表中間任何字。"""
+    pats = [".*?".join(re.escape(p) for p in re.split(r"\*|…+|\.{3}", w.strip()))
+            for w in str(settings.get("yesno_patterns", "")).split("/") if w.strip()]
+    return re.compile("|".join(pats)) if pats else None
 
 
 def auto_reactions(settings: dict) -> list[tuple[re.Pattern, list[str]]]:

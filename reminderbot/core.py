@@ -18,7 +18,7 @@ from . import timeparse, weather
 from .router import (REMINDER_RE, Intent, clean_reminder_text, extract_wishes, fuzzy_match, purge_label, purge_scope,
                      route)
 from . import rules
-from .settings import auto_reactions, find_county, phrases, split_pool, topics, wish_acks, wish_verb
+from .settings import auto_reactions, find_county, phrases, split_pool, topics, wish_acks, wish_verb, yesno_regex
 
 HELP = """**我會做這些事**
 👋 **叫我**：@賈維斯，或句子裡提到賈維斯、Jarvis
@@ -367,6 +367,9 @@ class Assistant:
                 self.last_intent = Intent("refuse", text="不是主人")
                 return self._reply(msg, self.phrase(s, "unknown_phrases", rng))
             return self._dispatch(msg, it, s, now, rng)
+        if clean and (pat := yesno_regex(s)) and pat.search(clean):
+            self.last_intent = Intent("yesno")
+            return self._reply(msg, self.phrase(s, "yesno_phrases", rng))
         if greeted or not clean:
             self.last_intent = Intent("greet")
             text, image = self.greet(s, rng, now, msg.author.name)

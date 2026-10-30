@@ -35,6 +35,7 @@ def rules(s: dict) -> list[dict]:
             ("@賈維斯 或提到名字", "", [n.strip() for n in str(s["bot_names"]).split(",") if n.strip()]),
             ("打招呼、沒交代事情", "任何人都回", [n.strip() for n in str(s["greet_words"]).split(",") if n.strip()]),
             ("交代事情", "主人照做，別人拒絕", []),
+            ("問要不要", "沒交代事情時，任何人都隨機回", [w.strip() for w in str(s["yesno_patterns"]).split("/") if w.strip()]),
             ("只是提到名字", "不回", []),
         ]},
         {"title": "交代事情（由上往下，先符合的算）", "steps": [
@@ -89,7 +90,7 @@ def describe(it, tz) -> dict | None:
     names = {"help": "說明", "reminder": "提醒", "timer": "計時", "note": "記事", "wish": "記願望", "suggest": "從清單挑",
              "weather": "天氣", "list": "查詢", "cancel": "取消提醒", "delete_note": "刪除記事",
              "cancel_match": "用內容取消", "snooze": "延後", "payday_set": "設定發薪日", "unknown": "聽不懂",
-             "greet": "打招呼", "refuse": "拒絕", "rule": "自訂規則", "location": "改地點", "purge": "刪訊息"}
+             "greet": "打招呼", "refuse": "拒絕", "rule": "自訂規則", "location": "改地點", "purge": "刪訊息", "yesno": "問要不要"}
     parts = []
     if it.topic:
         parts.append(f"常見提醒：{it.topic}")
