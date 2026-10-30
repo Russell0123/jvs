@@ -50,7 +50,7 @@ align-items:center;justify-content:center;font-weight:700;font-size:18px;text-de
 .top .hash{color:#80848e;font-size:24px;font-weight:300}.top b{color:var(--head);font-size:16px}.top .sp{flex:1}
 .upd{display:flex;gap:8px;align-items:center;margin:0}.upd a{font-size:12px;color:var(--muted);text-decoration:none}
 .upd button{padding:4px 12px;font-size:13px}.upd button.new{background:var(--ok)}
-main{flex:1;overflow-y:auto;padding:16px 16px 48px}.inner{max-width:880px}
+main{flex:1;overflow-y:auto;padding:16px 16px 0}.inner{max-width:880px}
 section{background:var(--card);border-radius:8px;padding:12px 16px;margin-bottom:8px}
 h2{font-size:15px;margin:0;color:var(--head);font-weight:600}
 section.fold>h2{cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px;margin:-12px -16px;padding:12px 16px}
@@ -68,7 +68,7 @@ button{background:var(--accent);color:#fff;border:0;border-radius:4px;padding:8p
 button:hover{background:var(--accent-h)}button:disabled{opacity:.5;cursor:not-allowed}
 button.small{padding:3px 10px;font-size:13px}button.danger{background:var(--danger)}
 button.ghost{background:#4e5058;color:#fff}button.ghost:hover{background:#6d6f78}
-.btnrow{margin-top:12px}.bar{position:sticky;bottom:-48px;background:var(--bg);padding:12px 0 56px;margin-bottom:-48px;display:flex;gap:10px;z-index:1}
+.btnrow{margin-top:12px}.bar{position:sticky;bottom:0;background:var(--bg);padding:12px 0;display:flex;gap:10px;z-index:1}.bar .sp{flex:1}
 .flash{padding:10px 14px;border-radius:8px;margin-bottom:12px;background:rgba(88,101,242,.18);border-left:4px solid var(--accent)}
 .flash.err{background:rgba(218,55,60,.15);border-left-color:var(--danger)}
 table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -102,7 +102,7 @@ details>summary{list-style:none}details>summary::-webkit-details-marker{display:
 .side{width:auto;overflow:visible}.side-head{display:none}
 .side nav{display:flex;gap:2px;overflow-x:auto;white-space:nowrap;padding:6px 8px;align-items:center}
 .cat{margin:0 4px 0 10px;font-size:11px}.side nav a{padding:4px 8px}.side nav a::before{font-size:16px;width:12px}
-.top{position:sticky;top:0;background:var(--bg)}main{overflow:visible}.bar{bottom:0;padding-bottom:12px;margin-bottom:0}}
+.top{position:sticky;top:0;background:var(--bg)}main{overflow:visible}}
 """
 
 
@@ -835,12 +835,12 @@ def render_form(s: dict, groups, path: str, tools: bool, tall: bool = False) -> 
             else:
                 out.append(f"<input type='text' id='{k}' name='{k}' value='{escape(str(v), quote=True)}'>")
         out.append("</section>")
-    out.append("<div class='bar'><button>儲存</button></div></form>")
+    # 儲存、恢復預設、貼一次天氣放同一列（formaction 送到不同網址），不另外開一個區塊
     reset = "/reset" if path == "/" else f"{path}/reset"
-    out.append("<section>" + ("<form method='post' action='/weather/test' style='display:inline'>"
-                              "<button class='ghost'>貼一次天氣</button></form> " if tools else "") +
-               f"<form method='post' action='{reset}' style='display:inline' "
-               "onsubmit=\"return confirm('恢復預設？')\"><button class='ghost'>恢復預設</button></form></section>")
+    out.append("<div class='bar'><button>儲存</button><span class='sp'></span>"
+               + ("<button class='ghost' formaction='/weather/test' formnovalidate>貼一次天氣</button>" if tools else "")
+               + f"<button class='ghost' formaction='{reset}' formnovalidate "
+               "onclick=\"return confirm('這一頁全部恢復預設？')\">恢復預設</button></div></form>")
     return "".join(out)
 
 
