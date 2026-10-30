@@ -482,7 +482,7 @@ class Assistant:
         out = self._rule_sends(rule, msg, now, s)
         for a in out:
             a.rule_id = rule["id"]
-        if rule.get("rename_user") and not msg.from_bot:             # 把講這句話的人的暱稱改掉
+        if rule.get("rename_user"):        # 把講這句話的人（或 bot，規則有開「機器人講的話」的話）的暱稱改掉
             out.append(Rename(msg.channel_id, rule["rename_user"], user_id=msg.author.id))
         return out
 

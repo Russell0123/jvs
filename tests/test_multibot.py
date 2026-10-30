@@ -446,8 +446,14 @@ def test_jbao_scolded_renames_user():
     assert r.text == "閉嘴，你也來當蔣萬安" and r.reply_to == 5
     assert isinstance(rn, Rename) and rn.user_id == 8 and rn.nick == "蔣萬安"
     assert core.handle(Incoming(ming, "你這個白癡", 1, 6, mentioned=False), NOW) == []          # 沒叫蔣寶不算
-    out = core.handle(Incoming(User(555, "賈維斯"), "蔣寶 白癡", 1, 8, mentioned=False, from_bot=True), NOW)
-    assert not any(isinstance(a, Rename) for a in out)                                         # bot 講的不算
+    jvs_user = User(555, "賈維斯")
+    out = core.handle(Incoming(jvs_user, "蔣寶 白癡", 1, 8, mentioned=False, from_bot=True), NOW)
+    assert not any(isinstance(a, Rename) for a in out)                     # 預設「機器人講的不算」
+    rule = next(r for r in rules.load(store) if r["name"] == "罵蔣寶")
+    rule["bots"] = "others"                                                 # 打開：賈維斯罵他也會被改名
+    rules.save(store, [r if r["id"] != rule["id"] else rule for r in rules.load(store)])
+    out = core.handle(Incoming(jvs_user, "蔣寶 白癡", 1, 9, mentioned=False, from_bot=True), NOW)
+    assert any(isinstance(a, Rename) and a.user_id == 555 and a.nick == "蔣萬安" for a in out)
 
 
 async def test_rename_member_adapter():
