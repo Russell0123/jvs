@@ -52,8 +52,8 @@ def test_jbao_relay_handoff():
         assert r.text[:-6] in pool and isinstance(h, Handoff) and h.message_id == 50 + i and "蔣寶" not in h.text
     assert not store.user_reminders(8) and not store.all_notes()                       # 自己不建提醒
     # 沒交代事情、沒叫它、只是聊天：都不理
-    for t, called in [("蔣寶", False), ("蔣寶 你好帥", False), ("我要吃什麼", False), ("雞巴", False)]:
-        assert core.handle(Incoming(ming, t, 1, 60, mentioned=called), NOW) == [], t
+    for t in ["蔣寶 好帥", "我要吃什麼", "雞巴", "今天好累"]:
+        assert core.handle(Incoming(ming, t, 1, 60, mentioned=False), NOW) == [], t
     assert core.tick(NOW.replace(hour=8, minute=5), 1) == []                            # 不發天氣、不提醒
 
 
@@ -132,7 +132,7 @@ async def test_web_switch_bots(tmp_path):
         assert "name='respond' checked" in html and "title='蔣寶'" in html and "href='/b/jbao/'" in html
         html = await (await client.get("/b/jbao/")).text()
         assert "href='/b/jbao/rules'" in html and "name='nick_rules'" in html
-        assert "/b/jbao/reminders" not in html and "/b/jbao/food" not in html and "name='greet_words'" not in html
+        assert "/b/jbao/reminders" not in html and "/b/jbao/food" not in html and "name='greet_words'" in html
         assert "action='/b/jbao/'" in html and "data-base='/b/jbao'" in html
         assert "<a href='/' class='' title='賈維斯'>" in html                   # 在蔣寶頁面也點得回賈維斯
         assert "href='/b/jbao/' class='on' title='蔣寶'" in html
@@ -144,7 +144,7 @@ async def test_web_switch_bots(tmp_path):
         assert bots[1].store.settings()["nick_rules"] == "市長｜蔣市長"
         assert bots[1].store.settings()["persona"] == "relay"                              # 存設定不會改掉模式
         html = await (await client.get("/b/jbao/replies")).text()
-        assert "name='handoff_phrases'" in html and "name='confirm_phrases'" not in html
+        assert "name='handoff_phrases'" in html and "name='greet_phrases'" in html and "name='confirm_phrases'" not in html
         assert bots[0].store.settings()["bot_names"] != "蔣寶"
         # 舊網址的圖片頁改到預設回覆
         r = await client.get("/b/jbao/images", allow_redirects=False)
@@ -195,3 +195,71 @@ async def test_take_over_runs_jarvis_flow_on_own_message():
     [(actions, source)] = ran
     assert source is own_msg                                        # 回覆用的是賈維斯自己抓的訊息
     assert actions and actions[0].reply_to == 42                    # 小明還沒說在哪：先問他在哪
+
+
+def test_jbao_greets():
+    core, store = jbao_core()
+    store.save_settings({"greet_phrases": "市民朋友好", "greet_rare_percent": 0})
+    ming = User(8, "小明")
+    for i, (t, m) in enumerate([("蔣寶", False), ("嗨蔣寶", False), ("", True), ("蔣寶 早安", False)]):
+        [r] = core.handle(Incoming(ming, t, 1, 70 + i, mentioned=m), NOW + timedelta(minutes=i))
+        assert r.text == "市民朋友好" and r.reply_to == 70 + i, t
+    core.set_images("greet", ["a.png"])
+    [r] = core.handle(Incoming(ming, "蔣寶", 1, 80, mentioned=False), NOW)
+    assert r.image == "greet/a.png"
+
+
+def test_jbao_cute_triple():
+    core, store = jbao_core()
+    rules.seed_rules(store, "jbao")
+    [rule] = rules.load(store)
+    assert rule["name"] == "可愛三連拍" and rule["send"] == "all" and rule["call"] == "yes"
+    out = core.handle(Incoming(ME, "蔣寶 可愛三連拍", 1, 5, mentioned=False), NOW)
+    assert out == []                                                   # 還沒放圖就不送
+    core.set_images(f"r{rule['id']}", ["1.png", "2.png", "3.png"])
+    out = core.handle(Incoming(User(8, "小明"), "蔣寶 可愛三連拍", 1, 6, mentioned=False), NOW)
+    assert [a.image for a in out] == [f"r{rule['id']}/{n}" for n in ("1.png", "2.png", "3.png")]
+    assert [a.reply_to for a in out] == [6, None, None] and all(not a.text for a in out)
+    assert core.handle(Incoming(ME, "可愛三連拍", 1, 7, mentioned=False), NOW) == []   # 要叫它
+    rules.save(store, [])
+    rules.seed_rules(store, "jbao")                                    # 刪掉就不會再加回來
+    assert rules.load(store) == []
+
+
+def test_send_all_with_text_lines():
+    core = Assistant(MemoryStore(), TZ, owner_id=7)
+    rule, _ = rules.from_form({"on": "on", "words": "數數", "send": "all", "mode": "replace",
+                               "replies": "一\n\"二\n二\"\n三"}, 1)
+    rules.save(core.store, [rule])
+    core.set_images("r1", ["a.png"])
+    out = core.handle(Incoming(ME, "賈維斯 數數", 1, 9, mentioned=False), NOW)
+    assert [(a.text, a.image) for a in out] == [("一", "r1/a.png"), ("二\n二", ""), ("三", "")]
+
+
+def test_jbao_says():
+    core, store = jbao_core()
+    core.says_fallback = ""                                            # 蔣寶沒有預設圖
+    [r] = core.slash("stark", User(8, "小明"), NOW, 1, target_id=99)
+    assert r.ephemeral and "上傳" in r.text
+    core.set_images("stark", ["j.png"])
+    pub, ack = core.slash("stark", User(8, "小明"), NOW, 1, target_id=99)
+    assert pub.reply_to == 99 and pub.image == "stark/j.png" and not pub.ephemeral and ack.ephemeral
+
+
+async def test_jbao_replies_page_has_says_gallery(tmp_path):
+    main = base_cfg(tmp_path)
+    bots = []
+    for c in [main, replace(main, key="jbao", name="蔣寶", db_path=str(tmp_path / "jbao.db"), slash=False)]:
+        store = SqliteStore(c.db_path)
+        seed_profile(store, c.key)
+        bots.append(SimpleNamespace(config=c, tz=TZ, store=store, core=Assistant(store, TZ, owner_id=7),
+                                    get_user=lambda i: None, is_ready=lambda: True))
+    client = TestClient(TestServer(make_app(bots)))
+    await client.start_server()
+    try:
+        html = await (await client.get("/b/jbao/replies")).text()
+        assert "Jbao says" in html and "action='/b/jbao/images/stark/upload'" in html
+        assert "builtin/stark.png" not in html
+        assert "builtin/stark.png" in await (await client.get("/replies")).text()
+    finally:
+        await client.close()

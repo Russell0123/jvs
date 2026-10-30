@@ -262,7 +262,7 @@ def make_app(bots) -> web.Application:
         title, groups, path = PAGES[kind]
         s = bot.store.settings()
         if relay() and kind in RELAY_FORMS:
-            groups, extra = RELAY_FORMS[kind], ""
+            groups = RELAY_FORMS[kind]
         intro = {"replies": REPLY_HELP, "food": food_summary(s), "reactions": REACTION_HELP}.get(kind, "")
         return page(title, kind, intro + render_form(s, groups, path, kind == "settings", tall=kind == "food") + extra,
                     flash, error)
@@ -481,10 +481,13 @@ def make_app(bots) -> web.Application:
         lost = sum(1 for g in images.GROUPS for n in bot.core.images(g) if not images.path_of(img_root(), f"{g}/{n}"))
         warn = (f"⚠️ 有 {lost} 張圖的檔案不見了。在那張的位置按「重新上傳」選一張圖就好，"
                 "代碼不變，回覆裡的 {圖:代碼} 不用改。") if lost else ""
+        key = bot.config.key
         for g, gname in images.GROUPS.items():
             names = bot.core.images(g)
+            if g == "stark" and key != "jvs":
+                gname = f"{key.capitalize()} says（/{key} says、右鍵選單；沒放圖就不能用）"
             empty = ("<p class='tag'>沒放圖時用這張預設的：</p><div class='gallery'><figure>"
-                     "<img src='/images/builtin/stark.png' alt=''></figure></div>") if g == "stark" else ""
+                     "<img src='/images/builtin/stark.png' alt=''></figure></div>") if g == "stark" and key == "jvs" else ""
             out.append(f"<section id='img-{g}'><h2>🖼️ 圖片：{gname}（{len(names)} 張）</h2>{gallery(g, names, '')}"
                        f"{'' if names else empty}</section>")
         return "".join(out), warn
@@ -529,16 +532,18 @@ def make_app(bots) -> web.Application:
         group = request.match_info["group"]
         if not images.valid_group(group):
             raise web.HTTPNotFound()
-        added, errors = [], []
+        added, errors, files = [], [], []
         reader = await request.multipart()
         while (part := await reader.next()) is not None:
-            if part.name != "files" or not part.filename:
-                continue
-            data = await part.read(decode=False)
+            if part.name == "files" and part.filename:
+                files.append((part.filename, bytes(await part.read(decode=False))))
+        # 一次選好幾張時照檔名排（1.png、2.png、3.png），依序送出的規則才會照這個順序
+        for filename, data in sorted(files, key=lambda f: [int(x) if x.isdigit() else x
+                                                          for x in re.split(r"(\d+)", f[0])]):
             try:
-                added.append(images.save(img_root(), group, bytes(data)))
+                added.append(images.save(img_root(), group, data))
             except ValueError as e:
-                errors.append(f"{part.filename}：{e}")
+                errors.append(f"{filename}：{e}")
         if added:
             bot.core.set_images(group, bot.core.images(group) + added)
         if errors:
@@ -589,6 +594,7 @@ def make_app(bots) -> web.Application:
             f"<input type='text' name='words' value='{val('words')}' placeholder='報告/作業'>"
             f"<label>但不包含</label><input type='text' name='not_words' value='{val('not_words')}' placeholder='交了'>"
             f"<label>符合的話</label>{sel('mode', rules.MODE)}"
+            f"<label>送幾則</label>{sel('send', rules.SEND)}"
             f"<label>回覆：一行一句隨機挑，多行的句子用 \" \" 包起來，句子後面加 {{圖:代碼}} 配指定的圖、{{圖:無}} 不附圖；"
             f"可用 {{時段}} {{名字}} {{天氣}}，可以不填只回圖</label>"
             f"<textarea name='replies' rows='3'>{escape(r['replies'])}</textarea>"
@@ -619,7 +625,8 @@ def make_app(bots) -> web.Application:
                 f"<span class='kw'>{escape(words)}</span><span class='tag'>{escape(rules.summary(r))}</span></summary>"
                 f"<form method='post' action='/rules/{r['id']}'>{rule_fields(r, escape(names_txt))}"
                 f"<div class='btnrow'><button>儲存</button></div></form>"
-                f"<label>圖片：符合時隨機附一張</label>{gallery(g, bot.core.images(g), 'rules')}"
+                f"<label>圖片：{'依上傳順序一張一則' if r.get('send') == 'all' else '符合時隨機附一張'}</label>"
+                f"{gallery(g, bot.core.images(g), 'rules')}"
                 f"<form method='post' action='/rules/{r['id']}/delete' style='margin-top:10px' "
                 f"onsubmit=\"return confirm('刪掉這條規則和它的圖？')\"><button class='ghost small'>刪除這條規則</button></form>"
                 f"</details></li>")

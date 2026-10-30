@@ -226,6 +226,7 @@ class Assistant:
         self.owner_id = owner_id                 # 沒設定 wish_listen_ids 時，只聽這個人的願望
         self.home_channel_id = home_channel_id   # 提醒一律發到這個頻道（在哪裡 @ 都一樣）
         self.last_intent: Intent | None = None   # 測試網頁顯示「判斷結果」用
+        self.says_fallback = "builtin/stark.png"  # xxx says 沒放圖時用的圖（蔣寶沒有預設圖）
 
     def migrate(self):
         """一次性整理：清單只留想看、想畫、想買、備忘，其他清單和裡面記的東西刪掉。"""
@@ -339,7 +340,7 @@ class Assistant:
         return []
 
     def _relay(self, msg: Incoming, now: datetime, s: dict) -> list:
-        """只做：自動按表符、改暱稱、自訂回覆；叫它交代賈維斯會的事 → 回一句官腔再 @賈維斯，讓賈維斯接手。"""
+        """只做：自動按表符、改暱稱、自訂回覆、打招呼；叫它交代賈維斯會的事 → 回一句官腔再 @賈維斯，讓賈維斯接手。"""
         self.last_intent = None
         out = self.reactions(msg, s) + self._rename(msg, s)
         rule = self._rule_for(msg, now, s)
@@ -360,6 +361,14 @@ class Assistant:
                 line = self.phrase(s, "handoff_phrases", rng, 任務=label)
                 self.last_intent = Intent("handoff", text=label)
                 out += self._reply(msg, f"{line} {{jvs}}") + [Handoff(msg.channel_id, msg.message_id, clean)]
+        if called and self.last_intent is None and not (rule and rule["mode"] == "add") \
+                and (not clean or re.search(self._greet_re(s), text, re.I)):
+            # 只叫名字、或「嗨蔣寶」這種招呼：跟賈維斯一樣打招呼（說法、圖庫都是蔣寶自己的）
+            self.last_intent = Intent("greet")
+            greet, image = self.greet(s, random.Random(msg.message_id or int(now.timestamp())), now, msg.author.name)
+            sent = self._reply(msg, greet)
+            sent[0].image = sent[0].image or image
+            out += sent
         if rule:
             self.last_intent = self.last_intent or Intent("rule", text=rule["name"])
             out += self._rule_reply(rule, msg, now, s)
@@ -397,6 +406,18 @@ class Assistant:
     def _rule_reply(self, rule: dict, msg: Incoming, now: datetime, s: dict) -> list:
         rng = random.Random((msg.message_id or int(now.timestamp())) + rule["id"])
         pool = split_pool(rule["replies"])
+        if rule.get("send") == "all":
+            # 依序全部送：第 i 則 = 第 i 句＋第 i 張（句子或圖哪個多就送幾則）；第一則回覆那個人，其他接在後面
+            imgs = self.images(f"r{rule['id']}")
+            out = []
+            for i in range(max(len(pool), len(imgs))):
+                line = say(IMG_TOKEN.sub("", pool[i]), 時段=self._daypart(now), 名字=msg.author.name or "",
+                           天氣=self._weather_now(now)) if i < len(pool) else ""
+                sent = Send(msg.channel_id, line[:2000], reply_to=msg.message_id if i == 0 else None,
+                            image=f"r{rule['id']}/{imgs[i]}" if i < len(imgs) else "")
+                if sent.text or sent.image:
+                    out.append(sent)
+            return out
         text = self.fill_pool(f"rule:{rule['id']}", pool, rng, now, msg.author.name) if pool else ""
         imgs = self.images(f"r{rule['id']}")
         out = self._reply(msg, text)
@@ -558,7 +579,9 @@ class Assistant:
             if not target_id:
                 return say_("找不到要回的訊息。")
             imgs = self.images("stark")
-            image = f"stark/{rng.choice(imgs)}" if imgs else "builtin/stark.png"
+            image = f"stark/{rng.choice(imgs)}" if imgs else self.says_fallback
+            if not image and not arg:
+                return say_("還沒有圖，先到設定網頁「預設回覆」最下面的 says 圖庫上傳一張。")
             return [Send(channel_id, arg[:2000], reply_to=target_id, image=image), *say_("👌")]
         if name == "purge":
             code = purge_scope(arg) or ("all" if not arg.strip() else None)

@@ -10,8 +10,9 @@ WHO = {"any": "任何人", "owner": "只有我", "others": "我以外的人", "l
 CALL = {"yes": "要叫它", "no": "不用叫也會"}
 TASK = {"any": "都可以", "yes": "有交代事情", "no": "沒交代事情"}
 MODE = {"add": "原本的照做，另外再回", "replace": "取代原本的回覆"}
+SEND = {"one": "隨機挑一句、一張", "all": "全部依序送出：一句／一張一則訊息"}
 BLANK = {"id": 0, "name": "", "on": True, "who": "any", "users": [], "call": "yes", "task": "any",
-         "words": "", "not_words": "", "mode": "add", "replies": "", "cooldown": 0}
+         "words": "", "not_words": "", "mode": "add", "replies": "", "cooldown": 0, "send": "one"}
 
 
 def split_words(raw: str) -> list[str]:
@@ -43,7 +44,7 @@ def from_form(form: dict, rid: int) -> tuple[dict, list[str]]:
         "who": pick("who", WHO), "users": users, "call": pick("call", CALL), "task": pick("task", TASK),
         "words": str(form.get("words", "")).strip(), "not_words": str(form.get("not_words", "")).strip(),
         "mode": pick("mode", MODE), "replies": str(form.get("replies", "")).replace("\r\n", "\n").strip(),
-        "cooldown": cooldown,
+        "cooldown": cooldown, "send": pick("send", SEND),
     }
     if rule["who"] == "list" and not users:
         errors.append("「指定的人」要填 Discord 使用者 ID")
@@ -80,4 +81,29 @@ def summary(rule: dict) -> str:
         parts.append("包含 " + "/".join(split_words(rule["words"])))
     if rule["not_words"]:
         parts.append("不含 " + "/".join(split_words(rule["not_words"])))
-    return "・".join(parts) + (" → 取代" if rule["mode"] == "replace" else " → 另外回")
+    return "・".join(parts) + (" → 取代" if rule["mode"] == "replace" else " → 另外回") + \
+        ("・依序全部送" if rule.get("send") == "all" else "")
+
+
+# 每個 bot 預設帶的規則（第一次啟動時加進去，之後在網頁改；刪掉也不會再加回來）
+SEED_RULES: dict[str, list[dict]] = {
+    "jbao": [{"name": "可愛三連拍", "call": "yes", "words": "可愛三連拍/三連拍", "mode": "replace", "send": "all",
+              "replies": ""}],
+}
+
+
+def seed_rules(store, key: str):
+    done = set(store.get_meta("_seed_rules") or [])
+    todo = [r for r in SEED_RULES.get(key, []) if r["name"] not in done]
+    if not todo:
+        return
+    all_rules = load(store)
+    rid = max([int(store.get_meta("rule_seq") or 0)] + [r["id"] for r in all_rules])
+    for r in todo:
+        rid += 1
+        rule, _ = from_form({**BLANK, **r, "on": "on"}, rid)
+        all_rules.append(rule)
+        done.add(r["name"])
+    save(store, all_rules)
+    store.set_meta("rule_seq", rid)
+    store.set_meta("_seed_rules", sorted(done))

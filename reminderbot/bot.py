@@ -14,6 +14,7 @@ from discord.ext import tasks
 from . import images, weather
 from .config import Config
 from .core import Assistant, Button, Edit, Handoff, Incoming, NeedWeather, Purge, React, Rename, Send, User
+from .rules import seed_rules
 from .settings import seed_profile
 from .store import SqliteStore
 
@@ -142,9 +143,12 @@ class ReminderBot(discord.Client):
         self.tz = config.tz
         self.store = SqliteStore(config.db_path)
         seed_profile(self.store, config.key)
+        seed_rules(self.store, config.key)
         self.core = Assistant(self.store, self.tz, owner_id=config.owner_id,
                               home_channel_id=config.reminder_channel_id)
         self.core.migrate()
+        if config.key != "jvs":
+            self.core.says_fallback = ""        # Stark 的預設圖只給賈維斯
         self._tasks: set = set()         # 背景的天氣查詢
         self._monitoring = False         # 天氣變化檢查還在跑就不重複開
         self._purging: set[int] = set()  # 正在刪訊息的頻道
@@ -177,7 +181,8 @@ class ReminderBot(discord.Client):
     def _setup_commands(self):
         self.tree = app_commands.CommandTree(self)
         if not self.config.slash:
-            return          # 這個 bot 先不開 / 指令（登入時會把舊的清掉）
+            self._setup_says(self.config.key, self.config.key.capitalize())    # 蔣寶：只有 /jbao says
+            return
 
         @self.tree.command(name="說明", description="看賈維斯會做什麼")
         async def help_cmd(interaction: discord.Interaction):
@@ -191,19 +196,7 @@ class ReminderBot(discord.Client):
         async def reminders_cmd(interaction: discord.Interaction):
             await self._slash(interaction, "reminders")
 
-        stark = app_commands.Group(name="stark", description="Stark 語錄")
-
-        @stark.command(name="says", description="賈維斯拿 Stark 的圖回覆某則訊息")
-        @app_commands.describe(圖片="換一張圖（不放就用預設的）", 訊息="要回的訊息連結（不填就回頻道裡最新一則別人的訊息）",
-                               文字="順便說一句")
-        async def stark_cmd(interaction: discord.Interaction, 圖片: discord.Attachment | None = None,
-                            訊息: str = "", 文字: str = ""):
-            await self._stark(interaction, None, 圖片, 訊息, 文字)
-        self.tree.add_command(stark)
-
-        @self.tree.context_menu(name="Stark says")
-        async def stark_menu(interaction: discord.Interaction, message: discord.Message):
-            await self._stark(interaction, message)
+        self._setup_says("stark", "Stark")
 
         @self.tree.command(name="清除", description="刪掉這個頻道的訊息（只有主人能用，會先問）")
         @app_commands.describe(範圍="例如：全部、近7天、今天、近2小時、最近50則")
@@ -214,6 +207,22 @@ class ReminderBot(discord.Client):
         @app_commands.describe(地點="例如：台中、明天、台中明天（不填就看你所在地）")
         async def weather_cmd(interaction: discord.Interaction, 地點: str = ""):
             await self._slash(interaction, "weather", 地點)
+
+    def _setup_says(self, cmd: str, who: str):
+        """/<cmd> says 和右鍵選單「<who> says」：用 says 圖庫的圖回覆某則訊息。"""
+        group = app_commands.Group(name=cmd, description=f"{who} 語錄")
+
+        @group.command(name="says", description=f"{self.config.name}拿 {who} 的圖回覆某則訊息")
+        @app_commands.describe(圖片="換一張圖（不放就用預設的）", 訊息="要回的訊息連結（不填就回頻道裡最新一則別人的訊息）",
+                               文字="順便說一句")
+        async def says_cmd(interaction: discord.Interaction, 圖片: discord.Attachment | None = None,
+                           訊息: str = "", 文字: str = ""):
+            await self._stark(interaction, None, 圖片, 訊息, 文字)
+        self.tree.add_command(group)
+
+        @self.tree.context_menu(name=f"{who} says")
+        async def says_menu(interaction: discord.Interaction, message: discord.Message):
+            await self._stark(interaction, message)
 
     async def _stark(self, interaction: discord.Interaction, target: discord.Message | None,
                      upload: discord.Attachment | None = None, link: str = "", text: str = ""):

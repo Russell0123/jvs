@@ -250,8 +250,10 @@ REACTION_GROUPS = [("自動按表符", ["auto_reactions"])]
 REACTION_KEYS = ["auto_reactions"]
 
 # 轉介模式（蔣寶）只看得到這些
-RELAY_SETTING_GROUPS = [("功能", ["respond", "all_channels"]), ("叫它", ["bot_names"]), ("改暱稱", ["nick_rules"])]
-RELAY_REPLY_GROUPS = [("轉給賈維斯", ["handoff_phrases"])]
+RELAY_SETTING_GROUPS = [("功能", ["respond", "all_channels"]),
+                        ("叫它", ["bot_names", "greet_words", "greet_rare_percent", "greet_image_percent"]),
+                        ("改暱稱", ["nick_rules"])]
+RELAY_REPLY_GROUPS = [("轉給賈維斯", ["handoff_phrases"]), ("打招呼", ["greet_phrases", "greet_rare_phrases"])]
 NICK_GROUP = ("改暱稱", ["nick_rules"])
 REPLY_KEYS = [k for _, keys in REPLY_GROUPS for k in keys]
 SETTING_KEYS = [k for _, keys in GROUPS for k in keys]
