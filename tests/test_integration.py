@@ -528,7 +528,7 @@ async def test_web_basic_auth(tmp_path):
     async def fetch_user(i):
         raise LookupError
     bot = SimpleNamespace(config=cfg, tz=TZ, store=SqliteStore(str(tmp_path / "a.db")),
-                          get_user=lambda i: None, fetch_user=fetch_user)
+                          get_user=lambda i: None, fetch_user=fetch_user, is_ready=lambda: True)
     client = TestClient(TestServer(make_app(bot)))
     await client.start_server()
     try:
@@ -537,6 +537,8 @@ async def test_web_basic_auth(tmp_path):
         assert (await client.get("/", headers=auth("me", "wrong"))).status == 401
         assert (await client.get("/", headers=auth("admin", "pw123"))).status == 401
         assert (await client.get("/", headers=auth("me", "pw123"))).status == 200
+        assert (await client.get("/healthz")).status == 200          # 更新時確認服務活著，不用帳密
+        assert (await client.get("/update.json")).status == 401
     finally:
         await client.close()
 

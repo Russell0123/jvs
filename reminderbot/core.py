@@ -283,6 +283,8 @@ class Assistant:
 
     def handle(self, msg: Incoming, now: datetime) -> list:
         """自訂規則先比對：「取代」就只回規則的；「另外回」就原本的照做再補一則。"""
+        if msg.author.name and self.store.get_meta(f"uname:{msg.author.id}") != msg.author.name:
+            self.store.set_meta(f"uname:{msg.author.id}", msg.author.name)     # 設定網頁顯示名字用
         s = self.store.settings()
         if not s["respond"]:
             self.last_intent = None

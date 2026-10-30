@@ -93,7 +93,9 @@ PORT=$(grep -E '^WEB_PORT=' "$APP_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d ' 
 healthy() {
   for _ in 1 2 3 4; do
     sleep "$WAIT"
-    if systemctl is-active --quiet jvs && curl -fsS --max-time 5 "http://127.0.0.1:${PORT:-8080}/healthz" >/dev/null; then
+    # 設定網頁有回應就算活著（舊版的 /healthz 要帳密，回 401 也算有回應）
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${PORT:-8080}/healthz")
+    if systemctl is-active --quiet jvs && [[ "$code" == 200 || "$code" == 401 ]]; then
       return 0
     fi
   done

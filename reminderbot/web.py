@@ -212,6 +212,8 @@ def make_app(bots) -> web.Application:
             raise
 
     async def guarded(request: web.Request, handler):
+        if request.path == "/healthz":       # 更新程式時確認服務活著用，不用帳密（只回 bot 有沒有連上）
+            return await handler(request)
         if cfg.admin_email:
             email = request.headers.get("Cf-Access-Authenticated-User-Email", "").lower()
             if email != cfg.admin_email:
@@ -238,12 +240,12 @@ def make_app(bots) -> web.Application:
         out = {}
         for i in set(ids):
             u = bot.get_user(i)
-            if u is None:
+            if u is None and not bot.store.get_meta(f"uname:{i}"):
                 try:
                     u = await bot.fetch_user(i)
                 except Exception:
                     u = None
-            out[i] = u.display_name if u else str(i)
+            out[i] = u.display_name if u else bot.store.get_meta(f"uname:{i}") or str(i)
         return out
 
     def form_page(kind: str, flash: str = "", error: bool = False, extra: str = ""):

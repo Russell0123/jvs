@@ -41,7 +41,8 @@ def env(tmp_path):
     stubs = {
         "runuser": 'while [[ "$1" != "--" ]]; do shift; done; shift; exec "$@"',
         "systemctl": f'[[ "$1" == is-active ]] && [[ -f "{app}/healthy" ]]',
-        "curl": f'[[ -f "{app}/healthy" ]]',
+        # 像真的 curl：-w '%{{http_code}}' 印狀態碼；活著回 401（設定網頁有帳密），死了回 000
+        "curl": f'if [[ -f "{app}/healthy" ]]; then printf 401; else printf 000; exit 7; fi',
         "journalctl": "exit 0",
     }
     for name, body in stubs.items():
