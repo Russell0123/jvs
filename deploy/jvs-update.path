@@ -1,0 +1,10 @@
+[Unit]
+Description=jvs 設定網頁的「更新到最新版」按鈕
+
+[Path]
+# bot 只能寫 /opt/jvs/data，所以按鈕只寫這個觸發檔；真正的更新由 root 的 jvs-update.service 做
+PathExists=/opt/jvs/data/update-request
+Unit=jvs-update.service
+
+[Install]
+WantedBy=multi-user.target

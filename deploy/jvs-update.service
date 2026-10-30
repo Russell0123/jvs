@@ -1,0 +1,7 @@
+[Unit]
+Description=jvs 從設定網頁更新程式（git pull → 檢查 → 安裝 → 確認服務正常，壞了就退回）
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/jvs/deploy/web-update.sh
+TimeoutStartSec=900

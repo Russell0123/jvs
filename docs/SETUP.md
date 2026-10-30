@@ -66,12 +66,28 @@ journalctl -u jvs -f         # 看到「已登入：jvs#xxxx」就成功了，Ct
 
 到頻道打 `@jvs 說明` 試試看。
 
-之後更新程式：
-```bash
-cd ~/jvs && sudo bash deploy/update.sh
-```
+### 之後更新程式：在設定網頁按一下
 
-資料庫每天凌晨 4 點自動備份到 `/opt/jvs/data/backups/`，保留 14 天。
+設定網頁上方的「**更新**」頁會顯示主機現在跑的版本、GitHub 上最新的版本（有新版會標「有新版本」）和上次更新的結果。按「更新到最新版」，大約 1 分鐘後頁面會自己重新整理出結果。
+
+它在主機上做的事：
+1. bot 只寫一個觸發檔 `/opt/jvs/data/update-request`（bot 用 jvs 帳號跑，沒有 sudo 權限）
+2. `jvs-update.path` 看到觸發檔，用 root 跑 `jvs-update.service`（`deploy/web-update.sh`）
+3. 用 repo 擁有者（ubuntu）的帳號在 `~/jvs` 跑 `git pull --ff-only`
+4. 先檢查：套件裝得起來、每個 `.py` 都能編譯、`reminderbot` 能 import。沒過就不安裝，原始碼退回原本的版本
+5. 跑 `deploy/install.sh` 安裝並重啟，等 20～40 秒確認服務和設定網頁都有回應
+6. 新版沒起來就自動退回上一版再裝一次，記錄「新版有問題，已退回」
+7. 全程紀錄在 `/opt/jvs/data/update.log`（更新頁可以展開看），結果在 `/opt/jvs/data/update-status.json`
+
+同一時間只會有一個更新在跑，重複按會提示「正在更新」。
+
+這個按鈕要先在主機上跑過一次新版的 `install.sh` 才會出現（它會安裝 `jvs-update.path`）：
+```bash
+cd ~/jvs && git pull && sudo bash deploy/install.sh
+```
+之後就不用再連進主機了。網頁更新也壞掉的時候，還是可以用上面這行手動更新。
+
+資料庫每天凌晨 4 點自動備份到 `/opt/jvs/data/backups/`，保留 14 天；上傳的圖片打包成 `images.tgz`。更新程式時 `/opt/jvs/data/` 整個不會動。
 
 ## 5. 設定網頁
 

@@ -8,3 +8,4 @@ data/backups/
 sim/dist/
 sim/.pyodide-cache/
 data/images/
+VERSION.json

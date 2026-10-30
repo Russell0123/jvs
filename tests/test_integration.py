@@ -764,8 +764,17 @@ async def test_web_rules(tmp_path):
                                   allow_redirects=False)
             assert r.status == 303
         assert [x["name"] for x in rules.load(store)] == ["一", "二"]
-        await client.post("/rules/2/up")
-        assert [x["name"] for x in rules.load(store)] == ["二", "一"]
+        r = await client.post("/rules/order", data={"ids": "2,1"})                 # 拖曳排序
+        assert r.status == 204 and [x["name"] for x in rules.load(store)] == ["二", "一"]
+        await client.post("/rules/order", data={"ids": "1"})                      # 沒列到的接在後面
+        assert [x["name"] for x in rules.load(store)] == ["一", "二"]
+        await client.post("/rules/order", data={"ids": "2,1"})
+        r = await client.post("/rules/1/toggle", data={"on": ""})                 # 列表勾選停用
+        assert r.status == 204 and not rules.load(store)[1]["on"]
+        html = await (await client.get("/rules")).text()
+        assert "class='off'" in html and html.index("＋ 新增規則") < html.index("id='rulelist'")
+        await client.post("/rules/1/toggle", data={"on": "1"})
+        assert rules.load(store)[1]["on"]
         await client.post("/rules/1", data={"name": "一改", "on": "on", "who": "owner"})
         assert rules.load(store)[1]["name"] == "一改" and rules.load(store)[1]["who"] == "owner"
         form = FormData()

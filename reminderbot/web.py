@@ -10,7 +10,7 @@ from urllib.parse import urlencode, urlparse
 
 from aiohttp import web
 
-from . import food, images, rules, timeparse
+from . import food, images, rules, timeparse, updater
 from .explain import describe, rules as logic_rules
 from .core import IMG_TOKEN, NO_IMAGE
 from .router import route
@@ -45,6 +45,14 @@ th{color:var(--muted);font-weight:500;white-space:nowrap}.wrap table{min-width:6
 .gallery .code{display:block;background:none;border:0;padding:0 0 4px;color:var(--muted);font:12px ui-monospace,monospace;cursor:pointer}.gallery .code[data-ok]{color:var(--accent)}
 .gallery .lost{aspect-ratio:1;border:1px dashed var(--line);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-size:12px;color:var(--muted);margin-bottom:4px}
 .gallery .lost label{cursor:pointer;color:var(--accent);border:1px solid var(--accent);border-radius:6px;padding:3px 8px}.gallery .lost input{display:none}
+.rulelist{list-style:none;margin:0;padding:0}.rulelist li{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px;background:var(--card)}
+.rulelist li.off summary b,.rulelist li.off .kw{opacity:.45}.rulelist li.dragging{opacity:.6;border-color:var(--accent)}
+.rulelist .handle{cursor:grab;touch-action:none;user-select:none;color:var(--muted);padding:2px 2px;line-height:1.4}
+.rulelist .rtoggle{margin-top:4px;flex:none;width:auto}.rulelist details{flex:1;min-width:0}.rulelist summary{cursor:pointer;line-height:1.5}
+.rulelist summary .kw{color:var(--accent);margin-left:6px;font-size:14px;overflow-wrap:anywhere}.rulelist summary .tag{display:block}
+.newrule{margin-bottom:12px}.newrule summary{cursor:pointer;font-weight:600;color:var(--accent)}.toast{font-size:13px;color:var(--accent);margin-left:10px;font-weight:400}
+.badge{background:var(--accent);color:#fff;border-radius:6px;padding:1px 8px;font-size:12px;font-weight:600}
+pre.log{white-space:pre-wrap;font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;max-height:320px;overflow:auto}
 .gallery img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:block;margin-bottom:4px}
 """
 
@@ -55,7 +63,7 @@ def page(title: str, active: str, body: str, flash: str = "", error: bool = Fals
                                           ("replies", "/replies", "回覆"), ("rules", "/rules", "規則"),
                                           ("food", "/food", "吃什麼"),
                                           ("images", "/images", "圖片"),
-                                          ("logic", "/logic", "判斷"),
+                                          ("logic", "/logic", "判斷"), ("update", "/update", "更新"),
                                           ("settings", "/", "設定")])
     fl = f'<div class="flash{" err" if error else ""}">{flash}</div>' if flash else ""
     html = (f"<!doctype html><html lang='zh-Hant'><head><meta charset='utf-8'>"
@@ -430,23 +438,32 @@ def make_app(bot) -> web.Application:
             all_rules = [draft if r["id"] == draft["id"] else r for r in all_rules]
         who = await names([u for r in all_rules for u in r["users"]])
         flash = flash or escape(request.query.get("err", "")) or ("✅ 已儲存" if "ok" in request.query else "")
-        out = ["<p class='tag'>每則訊息照順序比對，第一條符合的規則生效。回覆和圖片可以只放一種，兩種都有就一起送。</p>"]
-        for i, r in enumerate(all_rules):
+        out = ["<p class='tag'>每則訊息由上往下比對，第一條符合的規則生效；按住左邊的 ⋮⋮ 拖曳調整優先順序，"
+               "勾選框是啟用／停用。點標題展開編輯。</p>",
+               f"<section class='newrule' id='new'><details {'open' if not all_rules else ''}><summary>＋ 新增規則</summary>"
+               f"<form method='post' action='/rules/new'>{rule_fields(dict(rules.BLANK), '')}"
+               f"<div class='btnrow'><button>新增</button></div></form></details></section>"]
+        items = []
+        for r in all_rules:
             g = f"r{r['id']}"
             names_txt = "：" + "、".join(who.get(u, str(u)) for u in r["users"]) if r["users"] else ""
-            out.append(
-                f"<section id='{g}'><h2>{escape(r['name'])}{'' if r['on'] else '（停用）'}</h2>"
-                f"<p class='tag'>{escape(rules.summary(r))}</p>"
+            words = "/".join(rules.split_words(r["words"])) or "不限關鍵字"
+            items.append(
+                f"<li data-id='{r['id']}' id='{g}' class='{'' if r['on'] else 'off'}'>"
+                f"<span class='handle' title='拖曳調整順序'>⋮⋮</span>"
+                f"<input type='checkbox' class='rtoggle' title='啟用' {'checked' if r['on'] else ''}>"
+                f"<details {'open' if draft and draft['id'] == r['id'] else ''}><summary><b>{escape(r['name'])}</b> "
+                f"<span class='kw'>{escape(words)}</span><span class='tag'>{escape(rules.summary(r))}</span></summary>"
                 f"<form method='post' action='/rules/{r['id']}'>{rule_fields(r, escape(names_txt))}"
                 f"<div class='btnrow'><button>儲存</button></div></form>"
                 f"<label>圖片：符合時隨機附一張</label>{gallery(g, bot.core.images(g), 'rules')}"
-                f"<div class='rowform' style='margin-top:10px'>"
-                + (f"<form method='post' action='/rules/{r['id']}/up'><button class='ghost small'>往上移</button></form>"
-                   if i else "") +
-                f"<form method='post' action='/rules/{r['id']}/delete' onsubmit=\"return confirm('刪掉這條規則和它的圖？')\">"
-                f"<button class='ghost small'>刪除</button></form></div></section>")
-        out.append(f"<section id='new'><h2>新增規則</h2><form method='post' action='/rules/new'>"
-                   f"{rule_fields(dict(rules.BLANK), '')}<div class='btnrow'><button>新增</button></div></form></section>")
+                f"<form method='post' action='/rules/{r['id']}/delete' style='margin-top:10px' "
+                f"onsubmit=\"return confirm('刪掉這條規則和它的圖？')\"><button class='ghost small'>刪除這條規則</button></form>"
+                f"</details></li>")
+        out.append(f"<section><h2>規則（{len(all_rules)} 條）<span class='toast' id='rtoast'></span></h2>"
+                   + (f"<ol class='rulelist' id='rulelist'>{''.join(items)}</ol>" if items
+                      else "<p class='tag'>還沒有規則</p>") + "</section>")
+        out.append(RULES_JS)
         return page("規則", "rules", "".join(out), flash, error)
 
     async def rules_get(request: web.Request):
@@ -482,14 +499,77 @@ def make_app(bot) -> web.Application:
         bot.core.set_images(f"r{rid}", [])
         raise web.HTTPSeeOther("/rules?ok=1")
 
-    async def rule_up(request: web.Request):
-        rid = int(request.match_info["id"])
+    async def rule_toggle(request: web.Request):
+        rid, form = int(request.match_info["id"]), await request.post()
         all_rules = rules.load(bot.store)
-        i = next((i for i, r in enumerate(all_rules) if r["id"] == rid), 0)
-        if i:
-            all_rules[i - 1], all_rules[i] = all_rules[i], all_rules[i - 1]
-            rules.save(bot.store, all_rules)
-        raise web.HTTPSeeOther(f"/rules?ok=1#r{rid}")
+        for r in all_rules:
+            if r["id"] == rid:
+                r["on"] = form.get("on") == "1"
+        rules.save(bot.store, all_rules)
+        return web.Response(status=204)
+
+    async def rule_order(request: web.Request):
+        """拖曳完送來新的順序（規則編號，逗號分開）；沒列到的照原順序接在後面。"""
+        form = await request.post()
+        want = [int(x) for x in str(form.get("ids", "")).split(",") if x.strip().isdigit()]
+        all_rules = rules.load(bot.store)
+        by_id = {r["id"]: r for r in all_rules}
+        ordered = [by_id[i] for i in dict.fromkeys(want) if i in by_id]
+        rules.save(bot.store, ordered + [r for r in all_rules if r["id"] not in want])
+        return web.Response(status=204)
+
+    # ---------- 更新程式 ----------
+    data = updater.data_dir(cfg.db_path)
+
+    def when(ts) -> str:
+        return datetime.fromtimestamp(ts, bot.tz).strftime("%m/%d %H:%M") if ts else "?"
+
+    async def update_page(request: web.Request):
+        cur, st, busy = updater.version(data), updater.status(data), updater.running(data)
+        new = await updater.latest(cur.get("remote", ""), cur.get("branch", "main")) if cur else None
+        flash, err = "", False
+        if request.query.get("busy"):
+            flash, err = "正在更新，等它跑完再按。", True
+        elif busy:
+            flash = "⏳ 更新中…大約 1 分鐘，頁面會自己重新整理。"
+        out = ["<section><h2>主機現在跑的版本</h2>"]
+        if cur and cur.get("commit"):
+            out.append(f"<p><code>{escape(cur['short'])}</code> {escape(cur.get('message', ''))}"
+                       f"<br><span class='tag'>commit 時間 {when(cur.get('time'))}・安裝於 {when(cur.get('installed_at'))}"
+                       f"</span></p>")
+        else:
+            out.append("<p class='tag'>不知道。在主機上跑一次 <code>sudo bash deploy/install.sh</code> 就會記錄。</p>")
+        out.append("</section><section><h2>GitHub 上最新的版本</h2>")
+        if new:
+            newer = bool(cur and cur.get("commit") and new["commit"] != cur["commit"])
+            mark = " <b class='badge'>有新版本</b>" if newer else " <span class='tag'>已經是最新版</span>"
+            out.append(f"<p><code>{escape(new['short'])}</code> {escape(new['message'])}{mark}"
+                       f"<br><span class='tag'>commit 時間 {when(new['time'])}</span></p>")
+        else:
+            out.append("<p class='tag'>查不到（GitHub 沒回應，或還不知道 repo 在哪）</p>")
+        out.append("</section><section><h2>上次更新</h2>")
+        if st:
+            mark = "⏳" if st.get("state") == "running" else ("✅" if st.get("ok") else "❌")
+            ver = f"{st.get('from') or '?'} → {st.get('to')}" if st.get("to") and st.get("to") != st.get("from") else ""
+            out.append(f"<p>{mark} {escape(st.get('message', ''))}<br><span class='tag'>"
+                       f"{when(st.get('finished') or st.get('started'))}{'・' + escape(ver) if ver else ''}</span></p>")
+        else:
+            out.append("<p class='tag'>還沒從網頁更新過</p>")
+        if log := updater.log_tail(data):
+            out.append(f"<details><summary class='tag'>看紀錄</summary><pre class='log'>{escape(log)}</pre></details>")
+        out.append("</section>")
+        out.append("<form method='post' action='/update' onsubmit=\"return confirm('更新到 GitHub 上最新的版本？"
+                   "賈維斯會重新啟動，大約 1 分鐘。新版起不來會自動退回。')\"><div class='btnrow'>"
+                   f"<button {'disabled' if busy else ''}>{'更新中…' if busy else '更新到最新版'}</button></div></form>")
+        resp = page("更新", "update", "".join(out), flash, err)
+        if busy:
+            resp.headers["Refresh"] = "15"
+        return resp
+
+    async def update_start(request: web.Request):
+        if not updater.request(data):
+            raise web.HTTPSeeOther("/update?busy=1")
+        raise web.HTTPSeeOther("/update")
 
     async def health(request: web.Request):
         return web.json_response({"ok": True, "discord_ready": bot.is_ready()})
@@ -505,11 +585,12 @@ def make_app(bot) -> web.Application:
         web.get("/notes", notes_page), web.post(r"/notes/{id:\d+}/delete", note_delete),
         web.post(r"/notes/{id:\d+}/edit", note_edit), web.post("/notes/add", note_add),
         web.get("/rules", rules_get), web.post("/rules/new", rule_save), web.post(r"/rules/{id:\d+}", rule_save),
-        web.post(r"/rules/{id:\d+}/delete", rule_delete), web.post(r"/rules/{id:\d+}/up", rule_up),
+        web.post(r"/rules/{id:\d+}/delete", rule_delete), web.post(r"/rules/{id:\d+}/toggle", rule_toggle),
+        web.post("/rules/order", rule_order),
         web.get("/images", images_page), web.post(r"/images/{group}/upload", image_upload),
         web.get(r"/images/{group}/{name}", image_file), web.post(r"/images/{group}/{name}/delete", image_delete),
         web.post(r"/images/{group}/{name}/replace", image_replace),
-        web.get("/logic", logic_page), web.get("/healthz", health),
+        web.get("/logic", logic_page), web.get("/update", update_page), web.post("/update", update_start), web.get("/healthz", health),
     ])
     return app
 
@@ -517,6 +598,46 @@ def make_app(bot) -> web.Application:
 REPLY_HELP = ("<p class='tag'>一行一句，隨機挑一句回。想回多行的話用 \" \" 把那句包起來，中間可以換行。"
               "句子後面加 {圖:代碼} 就一定附那張圖，代碼在「圖片」或「規則」頁的圖下面；加 {圖:無} 就這句不附圖。</p>")
 
+
+RULES_JS = """<script>
+(() => {
+  const list = document.getElementById("rulelist"), toast = document.getElementById("rtoast");
+  const say = t => { if (toast) { toast.textContent = t; setTimeout(() => { toast.textContent = ""; }, 2000); } };
+  const post = (url, data) => fetch(url, {method: "POST", body: new URLSearchParams(data)})
+    .then(r => { if (!r.ok) throw new Error(r.status); });
+  const hash = location.hash && document.querySelector(location.hash + " > details");
+  if (hash) hash.open = true;
+  if (!list) return;
+  list.addEventListener("change", e => {
+    if (!e.target.matches(".rtoggle")) return;
+    const li = e.target.closest("li"), on = e.target.checked;
+    post(`/rules/${li.dataset.id}/toggle`, {on: on ? "1" : ""})
+      .then(() => { li.classList.toggle("off", !on); say(on ? "已啟用" : "已停用"); })
+      .catch(() => { e.target.checked = !on; say("沒存到，重新整理再試"); });
+  });
+  // 按住 ⋮⋮ 拖曳：滑鼠、手指都可以
+  let drag = null, before = "";
+  const order = () => [...list.children].map(li => li.dataset.id).join(",");
+  list.addEventListener("pointerdown", e => {
+    const h = e.target.closest(".handle"); if (!h) return;
+    e.preventDefault(); h.setPointerCapture(e.pointerId);
+    drag = h.closest("li"); drag.classList.add("dragging"); before = order();
+  });
+  list.addEventListener("pointermove", e => {
+    if (!drag) return;
+    const next = [...list.children].find(li => li !== drag &&
+      e.clientY < li.getBoundingClientRect().top + li.getBoundingClientRect().height / 2);
+    if (next !== drag.nextElementSibling) list.insertBefore(drag, next || null);
+  });
+  const end = () => {
+    if (!drag) return;
+    drag.classList.remove("dragging"); drag = null;
+    const now = order();
+    if (now !== before) post("/rules/order", {ids: now}).then(() => say("順序已更新")).catch(() => say("沒存到，重新整理再試"));
+  };
+  list.addEventListener("pointerup", end); list.addEventListener("pointercancel", end);
+})();
+</script>"""
 
 PAGES = {"settings": ("設定", GROUPS, "/"), "replies": ("回覆", REPLY_GROUPS, "/replies"),
          "food": ("吃什麼", FOOD_GROUPS, "/food")}
