@@ -191,7 +191,7 @@ legend { font-weight: 700; font-size: 13px; color: var(--accent); padding: 0; ma
           <textarea id="input" rows="1" placeholder="說點什麼…" aria-label="訊息"></textarea>
           <button class="primary" type="submit">送出</button>
         </div>
-        <div class="hint">不勾 @jvs＝一般聊天，句子裡提到「賈維斯」也算叫它・/說明 /設定 /天氣 /提醒 /stark says・@小明 提醒別人</div>
+        <div class="hint">不勾 @jvs＝一般聊天，句子裡提到「賈維斯」也算叫它・/說明 /設定 /天氣 /提醒 /清除 /stark says・@小明 提醒別人</div>
       </form>
     </section>
 
@@ -423,7 +423,7 @@ function wire() {
     e.preventDefault();
     const text = $("#input").value.trim();
     if (!text) return;
-    const sl = text.match(/^\/(說明|設定|天氣|提醒|stark says)\s*(.*)$/i);
+    const sl = text.match(/^\/(說明|設定|天氣|提醒|清除|stark says)\s*(.*)$/i);
     if (sl) call("slash", me, sl[1], sl[2], +$("#where").value);
     else call("say", me, text, replyTo, "", $("#atjvs").checked, +$("#where").value);
     $("#input").value = ""; replyTo = null; $("#replybar").hidden = true;
@@ -577,7 +577,7 @@ function runBatch(text, startLocal) {
       reply = target ? target.id : null; mentioned = false; rest = mm[2];
     }
     if (rest.startsWith("~")) { mentioned = false; rest = rest.slice(1).trim(); }
-    const sl = rest.match(/^\/(說明|設定|天氣|提醒|stark says)\s*(.*)$/i);
+    const sl = rest.match(/^\/(說明|設定|天氣|提醒|清除|stark says)\s*(.*)$/i);
     if (sl) { state = JSON.parse(sim.slash(who, sl[1], sl[2], chan)); continue; }
     state = JSON.parse(sim.say(who, rest, reply, tag, mentioned, chan));
   }

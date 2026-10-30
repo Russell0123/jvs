@@ -26,6 +26,9 @@ LIST_RE = (r"列出|列表|清單|有哪些|有什麼|有啥|查看|查詢|看�
 CANCEL_ID_RE = r"(取消|刪除|刪掉|移除|不用了|拿掉)\s*(?:提醒|記事|筆記|備忘|靈感|想看|想買|想做|主題)?\s*((?:#?\d+[\s,，、]*)+)$"
 CANCEL_VERB_RE = r"取消|刪掉|刪除|移除|拿掉|不用再|不要再|別再|不必再|不需要再"
 SNOOZE_RE = (r"延到|延後|順延|改到|改成|換成|變成|改為|提前到|提早到|調到|挪到|晚\S{0,5}?再|再(提醒|叫|跟)我|再提醒|再說|先不要")
+PURGE_VERB_RE = r"清空|清除|清掉|清理|清光|刪掉|刪除|刪光|砍掉|洗掉"
+PURGE_OBJ_RE = r"訊息|聊天|紀錄|記錄|對話|頻道|這裡"
+PURGE_NOT_RE = r"提醒|清單|記事|筆記|備忘|願望|靈感|想看|想買|想畫|想做"
 PAYDAY_SET_RE = rf"發薪日?\s*(是|在|為)\s*(每個?月)?\s*({NUM})\s*(號|日)"
 PAYDAY_RE = r"(每個?)?(發薪日|發薪那天|領薪水那天|領薪水的時候)"
 RAIN_RE = r"下雨(天|的時候|的話|時)|會下雨(的話|時)?|雨天"
@@ -129,6 +132,38 @@ class Intent:
     topic: str = ""                 # 常見提醒（休息、喝水…），回覆和觸發用固定說法
 
 
+def purge_scope(text: str) -> str | None:
+    """「近七天」→ d7、「近 2 小時」→ h2、「最近 50 則」→ n50、「今天」→ t、「全部／所有」→ all；看不出來回 None。"""
+    if m := re.search(rf"(?:近|最近|過去|前)\s*({NUM})?\s*(個)?\s*(天|日|小時|鐘頭|週|周|星期|禮拜|則|條|篇|封)", text):
+        n = cn2int(m.group(1)) if m.group(1) else 1
+        unit = m.group(3)
+        if unit in ("則", "條", "篇", "封"):
+            return f"n{n}"
+        if unit in ("小時", "鐘頭"):
+            return f"h{n}"
+        return f"d{n * 7 if unit in ('週', '周', '星期', '禮拜') else n}"
+    if re.search(r"今天|今日", text):
+        return "t"
+    if re.search(r"昨天|昨日", text):
+        return "y"
+    if re.search(r"(這|本)(個)?(週|周|星期|禮拜)", text):
+        return "w"
+    if re.search(r"(這|本)(個)?月", text):
+        return "m"
+    if re.search(r"所有|全部|全都|整個|全\S{0,2}訊息|清空|清光|刪光", text):
+        return "all"
+    return None
+
+
+def purge_label(code: str) -> str:
+    if code == "all":
+        return "所有"
+    if code in ("t", "y", "w", "m"):
+        return {"t": "今天", "y": "昨天到現在", "w": "這週", "m": "這個月"}[code]
+    unit = {"d": "天", "h": "小時", "n": "則"}[code[0]]
+    return f"{'最近' if code[0] == 'n' else '近'} {code[1:]} {unit}"
+
+
 def route(text: str, now: datetime, settings: dict) -> Intent:
     text = text.strip()
     tp_kwargs = dict(
@@ -140,6 +175,9 @@ def route(text: str, now: datetime, settings: dict) -> Intent:
 
     if not text or re.search(HELP_RE, text, re.I):
         return Intent("help")
+
+    if re.search(PURGE_VERB_RE, text) and re.search(PURGE_OBJ_RE, text) and not re.search(PURGE_NOT_RE, text):
+        return Intent("purge", text=purge_scope(text) or "all")
 
     if m := re.search(PAYDAY_SET_RE, text):
         if not re.search(REMINDER_RE, text):

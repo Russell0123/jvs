@@ -5,7 +5,7 @@ import asyncio
 import io
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import discord
 from discord import app_commands
@@ -13,7 +13,7 @@ from discord.ext import tasks
 
 from . import images, weather
 from .config import Config
-from .core import Assistant, Button, Edit, Incoming, NeedWeather, React, Send, User
+from .core import Assistant, Button, Edit, Incoming, NeedWeather, Purge, React, Send, User
 from .store import SqliteStore
 
 log = logging.getLogger(__name__)
@@ -144,6 +144,7 @@ class ReminderBot(discord.Client):
         self.web_runner = None
         self._tasks: set = set()         # 背景的天氣查詢
         self._monitoring = False         # 天氣變化檢查還在跑就不重複開
+        self._purging: set[int] = set()  # 正在刪訊息的頻道
 
     def now(self) -> datetime:
         return datetime.now(self.tz)
@@ -201,6 +202,11 @@ class ReminderBot(discord.Client):
         @self.tree.context_menu(name="Stark says")
         async def stark_menu(interaction: discord.Interaction, message: discord.Message):
             await self._stark(interaction, message)
+
+        @self.tree.command(name="清除", description="刪掉這個頻道的訊息（只有主人能用，會先問）")
+        @app_commands.describe(範圍="例如：全部、近7天、今天、近2小時、最近50則")
+        async def purge_cmd(interaction: discord.Interaction, 範圍: str):
+            await self._slash(interaction, "purge", 範圍)
 
         @self.tree.command(name="天氣", description="看天氣（只有你看得到）")
         @app_commands.describe(地點="例如：台中、明天、台中明天（不填就看你所在地）")
@@ -326,6 +332,78 @@ class ReminderBot(discord.Client):
             return
         await msg.add_reaction(emoji)
 
+    async def _purge(self, a: Purge, interaction: discord.Interaction):
+        """一批 100 則：兩週內的一次刪（bulk），更舊的只能一則一則刪（discord.py 會自己排隊等限速）。"""
+        if a.channel_id in self._purging:
+            return await interaction.followup.send("這個頻道已經在刪了。", ephemeral=True)
+        self._purging.add(a.channel_id)
+        ch = await self._channel(a.channel_id)
+        confirm = interaction.message
+        extra, before = [], None
+        if confirm is not None and not confirm.flags.ephemeral:
+            # 聊天叫的：從「叫它刪」那句往前算，確認訊息和那句最後另外刪
+            ref = confirm.reference.message_id if confirm.reference else None
+            before = discord.Object(ref or confirm.id)
+            extra = [i for i in (confirm.id, ref) if i]
+        progress = None
+        try:
+            progress = await interaction.followup.send("🧹 刪除中…", ephemeral=True, wait=True)
+        except discord.HTTPException:
+            pass
+        after = datetime.fromtimestamp(a.after, timezone.utc) if a.after else None
+        cutoff = discord.utils.utcnow() - timedelta(days=13, hours=23)
+        total, batch, last_report = 0, [], 0
+
+        async def flush():
+            nonlocal total, batch, last_report
+            young = [m for m in batch if m.created_at > cutoff]
+            singles = [m for m in batch if m.created_at <= cutoff]
+            if len(young) > 1:
+                await ch.delete_messages(young)
+            else:
+                singles += young
+            for m in singles:
+                try:
+                    await m.delete()
+                except discord.NotFound:
+                    pass
+            total += len(batch)
+            batch = []
+            if progress and total - last_report >= 100:
+                last_report = total
+                try:
+                    await progress.edit(content=f"🧹 刪除中…已刪 {total} 則")
+                except discord.HTTPException:
+                    pass
+        try:
+            async for m in ch.history(limit=None, before=before, after=after, oldest_first=False):
+                if m.pinned or m.id in extra:
+                    continue
+                batch.append(m)
+                if len(batch) >= 100 or (a.limit and total + len(batch) >= a.limit):
+                    await flush()
+                    if a.limit and total >= a.limit:
+                        break
+            if batch:
+                await flush()
+            for mid in extra:
+                try:
+                    await ch.get_partial_message(mid).delete()
+                except discord.HTTPException:
+                    pass
+            done = f"🧹 刪好了，{a.label}共 {total} 則。"
+        except discord.Forbidden:
+            done = f"🧹 刪到一半沒權限了（已刪 {total} 則）。要給賈維斯「管理訊息」權限。"
+        except discord.HTTPException as e:
+            log.exception("刪訊息失敗")
+            done = f"🧹 刪到一半出錯了（已刪 {total} 則）：{e}"
+        finally:
+            self._purging.discard(a.channel_id)
+        try:
+            await progress.edit(content=done) if progress else await interaction.followup.send(done, ephemeral=True)
+        except discord.HTTPException:
+            await ch.send(done, delete_after=15)       # 超過 15 分鐘，按鈕那邊已經不能回了
+
     async def _channel(self, channel_id: int):
         return self.get_channel(channel_id) or await self.fetch_channel(channel_id)
 
@@ -434,8 +512,11 @@ class ReminderBot(discord.Client):
         if res.append:
             content = f"{content}\n{self.emo(res.append, interaction.guild)}"
         await interaction.response.edit_message(content=content, view=None)
+        purges = [a for a in res.actions if isinstance(a, Purge)]
+        if purges:
+            asyncio.create_task(self._purge(purges[0], interaction))
         if res.actions:
-            await self.run_actions(res.actions)
+            await self.run_actions([a for a in res.actions if not isinstance(a, Purge)])
 
     # ---------- 編輯提醒：下拉選單 → 改時間／改內容／取消 ----------
     async def open_edit_menu(self, interaction: discord.Interaction):

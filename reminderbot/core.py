@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 
 from . import timeparse, weather
-from .router import REMINDER_RE, Intent, clean_reminder_text, extract_wishes, fuzzy_match, route
+from .router import (REMINDER_RE, Intent, clean_reminder_text, extract_wishes, fuzzy_match, purge_label, purge_scope,
+                     route)
 from . import rules
 from .settings import auto_reactions, find_county, phrases, split_pool, topics, wish_acks, wish_verb
 
@@ -33,6 +34,7 @@ HELP = """**我會做這些事**
 💤 **延後**：`後天再提醒我`、`晚兩個小時再提醒`
 ↩️ **回覆提醒**：`好`、`不用了`、`改成十分鐘後`
 🌤️ **天氣**：`天氣`、`明天會下雨嗎`、`我在台中`
+🧹 **刪訊息**：`清空這個頻道`、`刪掉近七天的訊息`、`/清除`，只有主人能用，會先問
 ⌨️ **指令**：`/說明`、`/設定`、`/天氣`、`/stark says`，或在訊息上按右鍵 → 應用程式 → Stark says"""
 
 DRAFT_MINUTES = 30          # 問了時間之後，多久內回答都算數
@@ -110,6 +112,15 @@ class Edit:
 
     def __post_init__(self):
         self.append = strip_marks(self.append)
+
+
+@dataclass
+class Purge:
+    """刪掉頻道裡的訊息（釘選的留著）。after = 只刪這個時間（unix 秒）之後的；limit = 最多刪幾則。"""
+    channel_id: int
+    after: int | None = None
+    limit: int | None = None
+    label: str = ""
 
 
 @dataclass
@@ -443,6 +454,11 @@ class Assistant:
             imgs = self.images("stark")
             image = f"stark/{rng.choice(imgs)}" if imgs else "builtin/stark.png"
             return [Send(channel_id, arg[:2000], reply_to=target_id, image=image), *say_("👌")]
+        if name == "purge":
+            code = purge_scope(arg) or ("all" if not arg.strip() else None)
+            if code is None:
+                return say_("範圍看不懂，例如：全部、近7天、今天、最近50則。")
+            return say_(*self.purge_confirm(user, code))
         if name == "help":
             return say_(HELP)
         if name == "settings":
@@ -459,6 +475,29 @@ class Assistant:
             return [NeedWeather(county, channel_id, town=town, ephemeral=True,
                                 mode="tomorrow" if "明" in arg else "today" if "今" in arg else "")]
         return say_("沒有這個指令。")
+
+    def purge_confirm(self, user: User, code: str) -> tuple[str, list[Button]]:
+        """刪訊息前先問；只有 .env 設了 OWNER_ID 的主人能用。"""
+        if self.owner_id is None:
+            return "要先在主機的 .env 設 OWNER_ID 才能用這個。", []
+        if user.id != self.owner_id:
+            return self.phrase(self.store.settings(), "unknown_phrases", random.Random()), []
+        return (f"要刪掉這個頻道{purge_label(code)}的訊息嗎？釘選的會留著，刪了就救不回來。",
+                [Button(f"rem:purge:{user.id}:{code}", "刪除", style="danger"), Button(f"rem:purgeno:{user.id}", "算了")])
+
+    def _purge_action(self, code: str, now: datetime, channel_id: int | None) -> Purge:
+        local = now.astimezone(self.tz)
+        midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+        after = {"t": midnight, "y": midnight - timedelta(days=1), "w": midnight - timedelta(days=local.weekday()),
+                 "m": midnight.replace(day=1)}.get(code)
+        limit = None
+        if code[:1] == "d":
+            after = local - timedelta(days=int(code[1:]))
+        elif code[:1] == "h":
+            after = local - timedelta(hours=int(code[1:]))
+        elif code[:1] == "n":
+            limit = int(code[1:])
+        return Purge(channel_id or 0, int(after.timestamp()) if after else None, limit, purge_label(code))
 
     def _reply_to_reminder(self, msg: Incoming, text: str, now: datetime, s: dict, rng) -> list | None:
         """回覆了 bot 的某則提醒訊息（不用 @）：取消、完成或延後「那一個」。不是這幾種就照一般判斷。"""
@@ -521,6 +560,9 @@ class Assistant:
             return reply(it.error)
         if it.kind == "help":
             return reply(HELP)
+        if it.kind == "purge":
+            text, buttons = self.purge_confirm(msg.author, it.text)
+            return reply(text, buttons)
 
         if it.kind == "reminder":
             if not s["feature_reminder"]:
@@ -877,12 +919,20 @@ class Assistant:
 
     # ---------- 按鈕 ----------
     def press(self, custom_id: str, user: User, now: datetime, channel_id: int | None = None) -> PressResult:
-        m = re.fullmatch(r"rem:(done|snooze|cancel|pick|snz|undo|stop|view|editmenu):(\d+)(?::([0-9a-z]+))?", custom_id)
+        m = re.fullmatch(r"rem:(done|snooze|cancel|pick|snz|undo|stop|view|editmenu|purge|purgeno):(\d+)"
+                         r"(?::([0-9a-z]+))?", custom_id)
         if not m:
             return PressResult(ephemeral="這個按鈕失效了。")
         action, rid, arg = m.group(1), int(m.group(2)), m.group(3)
         s = self.store.settings()
         rng = random.Random(rid * 7919 + int(now.timestamp()))
+
+        if action in ("purge", "purgeno"):
+            if self.owner_id is None or user.id != self.owner_id or user.id != rid:
+                return PressResult(ephemeral="只有主人可以按。")
+            if action == "purgeno":
+                return PressResult(append="-# 好，不刪")
+            return PressResult(append="-# 🧹 刪除中…", actions=[self._purge_action(arg or "", now, channel_id)])
 
         if action == "editmenu":
             return PressResult(edit_menu=True)

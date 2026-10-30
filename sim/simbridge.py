@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from reminderbot import rules, timeparse, weather
 from reminderbot.explain import describe, rules as logic_rules
-from reminderbot.core import Assistant, Edit, Incoming, NeedWeather, React, Send, User
+from reminderbot.core import Assistant, Edit, Incoming, NeedWeather, Purge, React, Send, User
 from reminderbot.settings import (COUNTIES, DEFAULTS, GROUPS, HINTS, LABELS, MULTILINE_KEYS, REPLY_GROUPS, REPLY_KEYS,
                                   SETTING_KEYS, note_categories, validate, wish_lists)
 from reminderbot.store import MemoryStore
@@ -88,7 +88,11 @@ class Sim:
             if res.append:
                 msg["text"] += "\n" + res.append
             msg["buttons"] = []
-        self._run(res.actions)
+        self._eph = user.id
+        try:
+            self._run(res.actions)
+        finally:
+            self._eph = None
         return self.state()
 
     def advance(self, seconds: int) -> str:
@@ -123,7 +127,7 @@ class Sim:
 
     def slash(self, user_id: int, name: str, arg: str = "", channel: int = CHANNEL) -> str:
         """/說明、/設定、/天氣：回覆只有本人看得到。"""
-        cmd = {"說明": "help", "設定": "settings", "天氣": "weather", "提醒": "reminders",
+        cmd = {"說明": "help", "設定": "settings", "天氣": "weather", "提醒": "reminders", "清除": "purge",
                "stark says": "stark"}.get(name.strip("/ ").lower(), name)
         # Stark says：回頻道裡最新一則別人的訊息
         target = next((m["id"] for m in reversed(self.messages) if m["channel"] == int(channel)
@@ -278,7 +282,7 @@ class Sim:
             "id": mid, "author": author, "text": text, "reply_to": reply_to, "time": self.now.strftime("%H:%M"),
             "date": timeparse.fmt_dt(self.now, TZ).rsplit(" ", 1)[0],
             "buttons": [b.__dict__ for b in (buttons or [])], "ping": ping, "ephemeral_for": ephemeral_for,
-            "channel": channel,
+            "channel": channel, "ts": int(self.now.timestamp()),
         })
         return mid
 
@@ -296,6 +300,16 @@ class Sim:
                     self._msg(mid)["image"] = self.core.resolve_image(a.image)
                 if a.reminder_id:
                     self.core.sent(a.reminder_id, mid, a.channel_id)
+            elif isinstance(a, Purge):
+                # 測試台：直接從畫面拿掉（批次的分段標題留著）
+                hit = [m for m in self.messages if m["channel"] == a.channel_id and m["author"] != 0
+                       and not m.get("ephemeral_for") and (a.after is None or m["ts"] >= a.after)]
+                if a.limit:
+                    hit = hit[-(a.limit + 2):]       # +2：叫它刪的那句和確認訊息
+                gone = {m["id"] for m in hit}
+                self.messages = [m for m in self.messages if m["id"] not in gone]
+                self._add(BOT_ID, f"🧹 刪好了，{a.label}共 {len(gone)} 則。", channel=a.channel_id,
+                          ephemeral_for=self._eph)
             elif isinstance(a, React):
                 m = self._msg(a.message_id)
                 if m is not None and a.emoji not in m.setdefault("reactions", []):
