@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .food import DEFAULT_LIBRARY, DEFAULT_QUESTIONS
+
 DEFAULTS: dict = {
     # 功能開關
     "feature_reminder": True,
@@ -41,6 +43,11 @@ DEFAULTS: dict = {
     "nice_advice": "天氣不錯，適合出門。\n{day}很舒服。\n出去走走吧。",
     "done_phrases": "👍\n好～\n辛苦了",
     "edit_phrases": "好，改好了。\n改好了👌\nOK，更新了。",
+    "food_triggers": "吃什麼/吃啥/吃甚麼/吃什麼好/不知道吃/不知道要吃/該吃什麼",
+    "food_questions": DEFAULT_QUESTIONS,
+    "food_library": DEFAULT_LIBRARY,
+    "food_result_phrases": "🍱 推薦這幾個：\n🍱 可以考慮：\n🍱 這幾個不錯：",
+    "food_pick_phrases": "就決定是 {food}！\n吃 {food} 吧\n{food}，走",
     "yesno_phrases": "要\n要啊\n當然要\n再考慮看看\n先不要\n不要好了",
     "greet_phrases": "嘿\n提到我嗎？\n？\n您好\n咪嗚\n{時段}，{名字}\n{時段}～外面{天氣}",
     "greet_rare_phrases": "史塔克的肛門",
@@ -52,6 +59,7 @@ DEFAULTS: dict = {
     "draft_cancel_phrases": "好，先不設。\nOK，那先不提醒。",
     "no_target_phrases": "現在沒有在響的提醒耶。",
     "location_phrases": "好，改看{place}的天氣。\n收到，你在{place}。",
+    "ask_location_phrases": "你在哪？說個縣市就好\n在哪個縣市？\n你人在哪？例如台中、高雄",
     "weather_wait_phrases": "氣象署沒回應，{minutes} 分鐘後再試一次。\n天氣抓不到，等 {minutes} 分鐘再試。",
     "alert_phrases": "{hour}點後可能{what}\n注意，{hour}點後可能{what}",
     "rain_yes_phrases": "{when}可能下雨，降雨 {pop}%。\n{when}會下雨喔，{pop}%。",
@@ -145,6 +153,11 @@ LABELS = {
     "greet_words": "打招呼的字（逗號分隔）", "greet_rare_percent": "稀有招呼機率 %", "greet_image_percent": "打招呼附圖機率 %（圖片頁上傳）",
     "yesno_patterns": "問要不要：符合這些句型就隨機回，* 代表中間任何字，用 / 分開",
     "yesno_phrases": "問要不要的回答",
+    "food_triggers": "叫它時句子有這些詞就開始問，用 / 分開",
+    "food_questions": "問題樹：一行一題「題目｜欄位｜代碼=選項／代碼=選項／不知道」，題目有「複選」就是複選；第一題分路線，之後用【代碼】分段",
+    "food_library": "食物庫：一行一項「編號. 品項　路線｜價位｜感覺｜形式｜冷熱｜畫面｜爽法｜吃法」，每個字是一個標記，— 是沒有",
+    "food_result_phrases": "吃什麼：推薦清單的開頭",
+    "food_pick_phrases": "吃什麼：按「幫我選一個」，{food} 是選到的",
     "greet_phrases": "打招呼 {時段} {名字} {天氣}", "greet_rare_phrases": "稀有招呼 {時段} {名字} {天氣}",
     "settings_link_phrases": "/設定 的說明",
     "confirm_phrases": "一般", "confirm_when_phrases": "照著講時間 {when}", "confirm_other_phrases": "提醒別人 {who}",
@@ -175,7 +188,7 @@ LABELS = {
     "weather_wait_phrases": "抓不到時先說一聲",
     "weather_alert_enabled": "預報變成會下雨時通知", "weather_check_minutes": "幾分鐘檢查一次",
     "weather_alert_hours": "看未來幾小時", "weather_quiet": "不通知的時段",
-    "location_phrases": "改地點 {place}", "alert_phrases": "天氣變化 {hour} {what}",
+    "location_phrases": "改地點 {place}", "ask_location_phrases": "問天氣但還不知道他在哪", "alert_phrases": "天氣變化 {hour} {what}",
     "rain_yes_phrases": "會下雨嗎→會 {when} {pop}", "rain_no_phrases": "會下雨嗎→不會 {when}",
     "note_categories": "記事分類（分類：關鍵字,關鍵字）", "wish_lists": "願望清單（清單：動詞,動詞）",
     "wish_listen_ids": "沒 @ 也聽誰（ID，空白＝只有你）", "passive_ack": "沒 @ 時回一句",
@@ -213,12 +226,16 @@ REPLY_GROUPS = [
                    "not_found_phrases"]),
     ("清單", ["wish_acks", "note_phrases", "suggest_phrases", "payday_set_phrases"]),
     ("天氣", ["rain_advice", "hot_advice", "cold_advice", "nice_advice", "rain_yes_phrases", "rain_no_phrases",
-            "alert_phrases", "location_phrases", "weather_wait_phrases"]),
+            "alert_phrases", "location_phrases", "ask_location_phrases", "weather_wait_phrases"]),
     ("常見提醒", ["topics"]),
     ("打招呼", ["greet_phrases", "greet_rare_phrases"]),
     ("問要不要", ["yesno_phrases"]),
+    ("吃什麼", ["food_result_phrases", "food_pick_phrases"]),
     ("其他", ["unknown_phrases", "settings_link_phrases"]),
 ]
+# 吃什麼頁：問題樹和食物庫
+FOOD_GROUPS = [("吃什麼", ["food_triggers", "food_questions", "food_library"])]
+FOOD_KEYS = [k for _, keys in FOOD_GROUPS for k in keys]
 REPLY_KEYS = [k for _, keys in REPLY_GROUPS for k in keys]
 SETTING_KEYS = [k for _, keys in GROUPS for k in keys]
 MULTILINE_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, str) and "\n" in v] + \

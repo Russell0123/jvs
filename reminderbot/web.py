@@ -10,12 +10,12 @@ from urllib.parse import urlencode, urlparse
 
 from aiohttp import web
 
-from . import images, rules, timeparse
+from . import food, images, rules, timeparse
 from .explain import describe, rules as logic_rules
 from .core import IMG_TOKEN, NO_IMAGE
 from .router import route
-from .settings import (COUNTIES, DEFAULTS, GROUPS, LABELS, MULTILINE_KEYS, REPLY_GROUPS, REPLY_KEYS, SETTING_KEYS,
-                       note_categories, validate, wish_lists)
+from .settings import (COUNTIES, DEFAULTS, FOOD_GROUPS, FOOD_KEYS, GROUPS, LABELS, MULTILINE_KEYS, REPLY_GROUPS,
+                       REPLY_KEYS, SETTING_KEYS, note_categories, validate, wish_lists)
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +51,7 @@ def page(title: str, active: str, body: str, flash: str = "", error: bool = Fals
     nav = "".join(f'<a href="{href}" class="{"on" if key == active else ""}">{name}</a>'
                   for key, href, name in [("reminders", "/reminders", "提醒"), ("notes", "/notes", "清單"),
                                           ("replies", "/replies", "回覆"), ("rules", "/rules", "規則"),
+                                          ("food", "/food", "吃什麼"),
                                           ("images", "/images", "圖片"),
                                           ("logic", "/logic", "判斷"),
                                           ("settings", "/", "設定")])
@@ -102,10 +103,21 @@ def make_app(bot) -> web.Application:
         return out
 
     def form_page(kind: str, flash: str = "", error: bool = False):
-        title, groups, path = ("回覆", REPLY_GROUPS, "/replies") if kind == "replies" else ("設定", GROUPS, "/")
-        intro = REPLY_HELP if kind == "replies" else ""
-        return page(title, kind, intro + render_form(bot.store.settings(), groups, path, kind == "settings"),
+        title, groups, path = PAGES[kind]
+        s = bot.store.settings()
+        intro = REPLY_HELP if kind == "replies" else food_summary(s) if kind == "food" else ""
+        return page(title, kind, intro + render_form(s, groups, path, kind == "settings", tall=kind == "food"),
                     flash, error)
+
+    def food_summary(s: dict) -> str:
+        foods, ferr = food.parse_library(s["food_library"])
+        tree, qerr = food.parse_questions(s["food_questions"])
+        names = {o.code: o.label for o in tree.first.options} if tree.first else {}
+        routes = "、".join(f"{names.get(k, k)} {sum(1 for f in foods if k in f.tags.get(food.ROUTE, set()))} 項"
+                          for k in tree.branches)
+        errs = "".join(f"<br>⚠️ {escape(e)}" for e in (qerr + ferr)[:15])
+        return (f"<p class='tag'>叫賈維斯說「我要吃什麼」就會一題一題問，最後給前 5 名。目前讀到 {len(foods)} 項食物"
+                f"{'：' + escape(routes) if routes else ''}。{errs}</p>")
 
     def missing_codes(values: dict) -> list[str]:
         codes = bot.core.image_codes()
@@ -121,7 +133,7 @@ def make_app(bot) -> web.Application:
 
     async def save(request: web.Request, kind: str):
         form = await request.post()
-        keys = REPLY_KEYS if kind == "replies" else SETTING_KEYS
+        keys = KEYS[kind]
         values, errors = validate(dict(form), keys)
         bot.store.save_settings(values)
         if errors:
@@ -129,12 +141,20 @@ def make_app(bot) -> web.Application:
         if missing := missing_codes(values):
             return form_page(kind, "已儲存，但圖片頁找不到這些代碼：" + escape("、".join(f"{{圖:{c}}}" for c in missing)),
                              error=True)
-        raise web.HTTPSeeOther(("/replies" if kind == "replies" else "/") + "?ok=saved")
+        raise web.HTTPSeeOther(PAGES[kind][2] + "?ok=saved")
 
     async def reset(request: web.Request, kind: str):
-        keys = REPLY_KEYS if kind == "replies" else SETTING_KEYS
-        bot.store.save_settings({k: DEFAULTS[k] for k in keys})
-        raise web.HTTPSeeOther(("/replies" if kind == "replies" else "/") + "?ok=saved")
+        bot.store.save_settings({k: DEFAULTS[k] for k in KEYS[kind]})
+        raise web.HTTPSeeOther(PAGES[kind][2] + "?ok=saved")
+
+    async def food_page(request: web.Request):
+        return form_page("food", "✅ 已儲存" if request.query.get("ok") else "")
+
+    async def save_food(request):
+        return await save(request, "food")
+
+    async def reset_food(request):
+        return await reset(request, "food")
 
     async def save_settings(request):
         return await save(request, "settings")
@@ -446,6 +466,7 @@ def make_app(bot) -> web.Application:
     app = web.Application(middlewares=[guard], client_max_size=80 * 1024 * 1024)
     app.add_routes([
         web.get("/", settings_page), web.post("/", save_settings), web.post("/reset", reset_settings),
+        web.get("/food", food_page), web.post("/food", save_food), web.post("/food/reset", reset_food),
         web.get("/replies", replies_page), web.post("/replies", save_replies), web.post("/replies/reset", reset_replies),
         web.post("/weather/test", weather_test),
         web.get("/reminders", reminders_page), web.post(r"/reminders/{id:\d+}/cancel", reminder_cancel),
@@ -465,7 +486,12 @@ REPLY_HELP = ("<p class='tag'>一行一句，隨機挑一句回。想回多行�
               "句子後面加 {圖:代碼} 就一定附那張圖，代碼在「圖片」或「規則」頁的圖下面；加 {圖:無} 就這句不附圖。</p>")
 
 
-def render_form(s: dict, groups, path: str, tools: bool) -> str:
+PAGES = {"settings": ("設定", GROUPS, "/"), "replies": ("回覆", REPLY_GROUPS, "/replies"),
+         "food": ("吃什麼", FOOD_GROUPS, "/food")}
+KEYS = {"settings": SETTING_KEYS, "replies": REPLY_KEYS, "food": FOOD_KEYS}
+
+
+def render_form(s: dict, groups, path: str, tools: bool, tall: bool = False) -> str:
     out = [f"<form method='post' action='{path}'>"]
     for title, keys in groups:
         out.append(f"<section><h2>{title}</h2>")
@@ -479,7 +505,7 @@ def render_form(s: dict, groups, path: str, tools: bool) -> str:
                 opts = "".join(f"<option {'selected' if c == v else ''}>{c}</option>" for c in COUNTIES)
                 out.append(f"<select id='{k}' name='{k}'>{opts}</select>")
             elif k in MULTILINE_KEYS:
-                rows = min(8, max(2, str(v).count("\n") + 1))
+                rows = min(30 if tall else 8, max(2, str(v).count("\n") + 1))
                 out.append(f"<textarea id='{k}' name='{k}' rows='{rows}'>{escape(str(v))}</textarea>")
             elif isinstance(DEFAULTS[k], int):
                 out.append(f"<input type='number' id='{k}' name='{k}' value='{v}'>")

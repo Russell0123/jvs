@@ -23,6 +23,7 @@ NO_PINGS = discord.AllowedMentions.none()
 # 說法裡的 :duzi: → <:duzi:ID>（bot 送 :名字: 不會自己變表情）；<:x:1>、<a:x:1>、12:30:00 不會被動到
 EMOJI_RE = re.compile(r"(?<![<\w])[:：]([A-Za-z0-9_]{2,32})[:：](?!\d)")
 STYLES = {"success": discord.ButtonStyle.success, "danger": discord.ButtonStyle.danger,
+          "primary": discord.ButtonStyle.primary,
           "secondary": discord.ButtonStyle.secondary}
 
 
@@ -502,6 +503,10 @@ class ReminderBot(discord.Client):
         res = self.core.press(custom_id, to_user(interaction.user), self.now(), interaction.channel_id)
         if res.edit_menu:
             return await self.open_edit_menu(interaction)
+        if res.content is not None:                  # 整則換掉（吃什麼的下一題）
+            view = make_view(res.buttons)
+            return await interaction.response.edit_message(content=self.emo(res.content, interaction.guild),
+                                                           view=view)
         if res.ephemeral:
             view = make_view(res.ephemeral_buttons)
             return await interaction.response.send_message(self.emo(res.ephemeral, interaction.guild), ephemeral=True,

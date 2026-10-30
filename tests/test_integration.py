@@ -840,3 +840,31 @@ def test_yesno(core):
     core.store.save_settings({"yesno_patterns": "該*嗎", "yesno_phrases": "該"})
     [(_, r)] = chat.say(MING, "賈維斯 我該睡了嗎", mentioned=False)
     assert r.text == "該"
+
+
+def test_weather_for_everyone(core):
+    core.owner_id = 7
+    chat = Chat(core)
+    [(_, r)] = chat.say(MING, "賈維斯 今天天氣如何", mentioned=False)          # 不知道小明在哪：先問
+    assert r.text in core.store.settings()["ask_location_phrases"].splitlines()
+    [(_, w)] = chat.say(MING, "台中", now=T0 + timedelta(minutes=2), mentioned=False)   # 不用 @ 直接回答
+    assert isinstance(w, NeedWeather) and w.county == "臺中市"
+    [(_, w)] = chat.say(MING, "賈維斯 明天會下雨嗎", now=T0 + timedelta(minutes=5), mentioned=False)
+    assert isinstance(w, NeedWeather) and w.county == "臺中市"                  # 記住了
+    [(_, r)] = chat.say(MING, "賈維斯 我在高雄", mentioned=False)                # 隨時可以改
+    [(_, w)] = chat.say(MING, "賈維斯 天氣", now=T0 + timedelta(minutes=6), mentioned=False)
+    assert w.county == "高雄市"
+    [(_, w)] = chat.say(MING, "賈維斯 台北天氣", mentioned=False)               # 講了地點就看那裡
+    assert w.county == "臺北市"
+    [(_, w)] = chat.say(ME, "賈維斯 天氣", mentioned=False)                    # 主人沒說過就用設定的縣市
+    assert w.county == core.store.settings()["weather_county"]
+    # 定時檢查只看主人的位置
+    chat.say(ME, "賈維斯 我在花蓮", mentioned=False)
+    core.store.save_settings({"weather_alert_enabled": True})
+    mon = [a for a in core.tick(T0 + timedelta(hours=1), CH) if isinstance(a, NeedWeather)]
+    assert mon and all(a.county == "花蓮縣" for a in mon)
+    # 問了位置但聊別的：不會亂記
+    chat.say(User(9, "阿華"), "賈維斯 天氣", mentioned=False)
+    assert chat.say(User(9, "阿華"), "好喔", mentioned=False) == [] and not core.knows_location(9)
+    [s] = core.slash("weather", User(9, "阿華"), T0, CH)
+    assert "還不知道你在哪" in s.text

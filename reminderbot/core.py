@@ -17,8 +17,10 @@ from datetime import datetime, time, timedelta
 from . import timeparse, weather
 from .router import (REMINDER_RE, Intent, clean_reminder_text, extract_wishes, fuzzy_match, purge_label, purge_scope,
                      route)
-from . import rules
+from . import food, rules
 from .settings import auto_reactions, find_county, phrases, split_pool, topics, wish_acks, wish_verb, yesno_regex
+
+EVERYONE = {"help", "weather", "location"}      # 「只有主人能交代事情」也開放給所有人的
 
 HELP = """**我會做這些事**
 👋 **叫我**：@賈維斯，或句子裡提到賈維斯、Jarvis
@@ -33,7 +35,8 @@ HELP = """**我會做這些事**
 🗑️ **取消**：`不用再提醒我喝水了`、`取消今天所有提醒`
 💤 **延後**：`後天再提醒我`、`晚兩個小時再提醒`
 ↩️ **回覆提醒**：`好`、`不用了`、`改成十分鐘後`
-🌤️ **天氣**：`天氣`、`明天會下雨嗎`、`我在台中`
+🌤️ **天氣**：`天氣`、`明天會下雨嗎`、`我在台中`，每個人看自己所在地
+🍱 **吃什麼**：`我要吃什麼`，回答幾題幫你挑
 🧹 **刪訊息**：`清空這個頻道`、`刪掉近七天的訊息`、`/清除`，只有主人能用，會先問
 ⌨️ **指令**：`/說明`、`/設定`、`/天氣`、`/stark says`，或在訊息上按右鍵 → 應用程式 → Stark says"""
 
@@ -163,9 +166,12 @@ class PressResult:
     edit_menu: bool = False                     # 打開「選一個提醒來改」的選單（Discord 用下拉選單）
     ephemeral_buttons: list = field(default_factory=list)
     actions: list = field(default_factory=list)  # 按完還要做的事（例如送出確認訊息）
+    content: str | None = None                  # 整則訊息換成這段（連按鈕一起換成 buttons）
+    buttons: list = field(default_factory=list)
 
     def __post_init__(self):
         self.ephemeral, self.append = strip_marks(self.ephemeral), strip_marks(self.append)
+        self.content = strip_marks(self.content)
 
 
 def mention_str(target: str) -> str:
@@ -322,6 +328,8 @@ class Assistant:
         owner = self.is_owner(msg.author.id)
         called = bool(re.search(self._names_re(s), text, re.I))
 
+        if (ans := self._answer_location(msg, self._strip_call(text, s), now, s, rng)) is not None:
+            return ans
         if not msg.mentioned and not called:
             self.last_intent = None
             # 主人回答 bot 的問句（「8點」）不用 @
@@ -349,6 +357,8 @@ class Assistant:
                 return out
 
         it = route(clean, now, s) if clean else Intent("unknown")
+        if clean and self._food_asked(clean, s) and it.kind in ("unknown", "suggest", "list"):
+            it = Intent("food")
         self.last_intent = it
 
         draft = self._draft_for(msg, now) if owner else None
@@ -362,8 +372,11 @@ class Assistant:
                 return self._finish_draft(draft, answer.when, answer.repeat, answer.phrase(clean), answer.dated,
                                           msg.channel_id, msg.message_id, now, rng)
 
+        if it.kind == "food":                       # 誰問都幫忙挑
+            text, buttons = self.food_start(msg.author, now)
+            return self._reply(msg, text, buttons)
         if it.kind != "unknown":
-            if s["owner_only"] and not owner:
+            if s["owner_only"] and not owner and it.kind not in EVERYONE:
                 self.last_intent = Intent("refuse", text="不是主人")
                 return self._reply(msg, self.phrase(s, "unknown_phrases", rng))
             return self._dispatch(msg, it, s, now, rng)
@@ -474,10 +487,102 @@ class Assistant:
             return [Send(channel_id, self.list_text(user.id, "reminders", None), [edit_button(user.id)], ephemeral=True)]
         if name == "weather":
             county = find_county(arg) if arg else None
+            if not county and not self.knows_location(user.id):
+                return say_("還不知道你在哪。跟我說「賈維斯 我在台中」，或用 /天氣 地點:台中")
             county, town = (county, "") if county else self.location(user.id, s)
             return [NeedWeather(county, channel_id, town=town, ephemeral=True,
                                 mode="tomorrow" if "明" in arg else "today" if "今" in arg else "")]
         return say_("沒有這個指令。")
+
+    # ---------- 吃什麼 ----------
+    def _food_asked(self, text: str, s: dict) -> bool:
+        words = [w.strip() for w in str(s["food_triggers"]).split("/") if w.strip()]
+        return bool(words) and any(w in text for w in words) and "最近" not in text \
+            and not re.search(REMINDER_RE, text)
+
+    def food_start(self, user: User, now: datetime) -> tuple[str, list[Button]]:
+        tree, _ = food.parse_questions(self.store.settings()["food_questions"])
+        if tree.first is None:
+            return "吃什麼的題目還沒設好，到設定網頁的「吃什麼」頁看看。", []
+        sid = int(self.store.get_meta("food_seq") or 0) + 1
+        self.store.set_meta("food_seq", sid)
+        self.store.set_meta(f"food:{sid - 30}", None)       # 舊的題目不留
+        sess = {"uid": user.id, "answers": [], "sel": [], "at": int(now.timestamp())}
+        self.store.set_meta(f"food:{sid}", sess)
+        return self._food_render(sid, sess, tree)
+
+    def _food_render(self, sid: int, sess: dict, tree) -> tuple[str, list[Button]]:
+        route = sess["answers"][0][0] if sess["answers"] and sess["answers"][0] else None
+        i = len(sess["answers"])
+        q = tree.questions(route)[i]
+        head = f"🍱 {i + 1}/{tree.length(route)} {q.text}"
+        buttons = []
+        for n, o in enumerate(q.options):
+            on = q.multi and o.code is not None and n in sess["sel"]
+            buttons.append(Button(f"rem:food:{sid}:{n}", ("✓ " if on else "") + o.label[:78],
+                                  style="success" if on else "secondary"))
+        if q.multi:
+            buttons.append(Button(f"rem:food:{sid}:ok", "好了 →", style="primary"))
+            picked = [q.options[n].label.split("：")[0] for n in sess["sel"]]
+            head += "\n-# 可以選好幾個，選完按「好了」" + (f"：{'、'.join(picked)}" if picked else "")
+        return head, buttons[:25]
+
+    def food_press(self, sid: int, arg: str, user: User, now: datetime) -> PressResult:
+        s = self.store.settings()
+        sess = self.store.get_meta(f"food:{sid}")
+        if not sess:
+            return PressResult(ephemeral="這題已經過期了，再問我一次吧。")
+        if sess["uid"] != user.id:
+            return PressResult(ephemeral="這是別人的題目喔，想挑的話自己問我一次。")
+        tree, _ = food.parse_questions(s["food_questions"])
+        rng = random.Random(sid * 31 + int(now.timestamp()))
+        if arg == "again":
+            sess.update(answers=[], sel=[], result=None)
+        elif arg == "pick":
+            if not sess.get("result"):
+                return PressResult(ephemeral="還沒有推薦。")
+            choice = rng.choice(sess["result"])
+            line = self.phrase(s, "food_pick_phrases", rng, food=f"**{choice}**")
+            return PressResult(content=self._food_result_text(sess, s, rng) + f"\n\n👉 {line}",
+                               buttons=[Button(f"rem:food:{sid}:again", "重來")])
+        elif sess.get("result") is None:
+            route = sess["answers"][0][0] if sess["answers"] and sess["answers"][0] else None
+            qs = tree.questions(route)
+            if len(sess["answers"]) >= len(qs):
+                return PressResult(ephemeral="這題已經答完了。")
+            q = qs[len(sess["answers"])]
+            if arg == "ok":
+                sess["answers"].append([q.options[n].code for n in sess["sel"] if q.options[n].code])
+                sess["sel"] = []
+            elif arg.isdigit() and int(arg) < len(q.options):
+                n, opt = int(arg), q.options[int(arg)]
+                if opt.code is None:                    # 不知道：這題不計分，直接下一題
+                    sess["answers"].append([])
+                    sess["sel"] = []
+                elif q.multi:
+                    sess["sel"] = [x for x in sess["sel"] if x != n] if n in sess["sel"] else sess["sel"] + [n]
+                else:
+                    sess["answers"].append([opt.code])
+            else:
+                return PressResult(ephemeral="這個按鈕失效了。")
+            route = sess["answers"][0][0] if sess["answers"] and sess["answers"][0] else None
+            if sess["answers"] and len(sess["answers"]) >= len(tree.questions(route)):
+                foods, _ = food.parse_library(s["food_library"])
+                sess["result"] = food.recommend(foods, tree, sess["answers"], sid * 7 + int(now.timestamp()))
+                sess["head"] = self.phrase(s, "food_result_phrases", rng)
+        self.store.set_meta(f"food:{sid}", sess)
+        if sess.get("result") is not None:
+            if not sess["result"]:
+                return PressResult(content="🍱 沒有符合的，預算放寬一點再試試？",
+                                   buttons=[Button(f"rem:food:{sid}:again", "重來")])
+            return PressResult(content=self._food_result_text(sess, s, rng),
+                               buttons=[Button(f"rem:food:{sid}:pick", "幫我選一個", style="primary"),
+                                        Button(f"rem:food:{sid}:again", "重來")])
+        text, buttons = self._food_render(sid, sess, tree)
+        return PressResult(content=text, buttons=buttons)
+
+    def _food_result_text(self, sess: dict, s: dict, rng) -> str:
+        return sess.get("head", "🍱") + "\n" + "\n".join(f"{i}. {name}" for i, name in enumerate(sess["result"], 1))
 
     def purge_confirm(self, user: User, code: str) -> tuple[str, list[Button]]:
         """刪訊息前先問；只有 .env 設了 OWNER_ID 的主人能用。"""
@@ -640,6 +745,9 @@ class Assistant:
         if it.kind == "weather":
             if not s["feature_weather"]:
                 return reply("天氣功能關著喔。")
+            if not it.county and not self.knows_location(msg.author.id):
+                self.store.set_meta(f"askloc:{msg.author.id}", {"mode": it.mode, "rain": it.rain, "at": ts})
+                return reply(self.phrase(s, "ask_location_phrases", rng))
             county, town = (it.county, it.town) if it.county else self.location(msg.author.id, s)
             return [NeedWeather(county, msg.channel_id, reply_to=msg.message_id, town=town, mode=it.mode,
                                 rain_q=it.rain)]
@@ -922,7 +1030,7 @@ class Assistant:
 
     # ---------- 按鈕 ----------
     def press(self, custom_id: str, user: User, now: datetime, channel_id: int | None = None) -> PressResult:
-        m = re.fullmatch(r"rem:(done|snooze|cancel|pick|snz|undo|stop|view|editmenu|purge|purgeno):(\d+)"
+        m = re.fullmatch(r"rem:(done|snooze|cancel|pick|snz|undo|stop|view|editmenu|purge|purgeno|food):(\d+)"
                          r"(?::([0-9a-z]+))?", custom_id)
         if not m:
             return PressResult(ephemeral="這個按鈕失效了。")
@@ -930,6 +1038,8 @@ class Assistant:
         s = self.store.settings()
         rng = random.Random(rid * 7919 + int(now.timestamp()))
 
+        if action == "food":
+            return self.food_press(rid, arg or "", user, now)
         if action in ("purge", "purgeno"):
             if self.owner_id is None or user.id != self.owner_id or user.id != rid:
                 return PressResult(ephemeral="只有主人可以按。")
@@ -1105,6 +1215,25 @@ class Assistant:
         return actions
 
     # ---------- 天氣 ----------
+    def knows_location(self, user_id: int) -> bool:
+        """主人沒說過也有設定的縣市；其他人要說過自己在哪才算知道。"""
+        return user_id == self.owner_id or self.owner_id is None or bool(self.store.get_meta(f"loc:{user_id}"))
+
+    def _answer_location(self, msg: Incoming, text: str, now: datetime, s: dict, rng) -> list | None:
+        """剛被問「你在哪」，這句講了縣市：記下來，接著查天氣。30 分鐘內有效。"""
+        ask = self.store.get_meta(f"askloc:{msg.author.id}")
+        if not ask or now.timestamp() - ask["at"] > 1800:
+            return None
+        it = route(text, now, s)
+        county, town = (it.county, it.town) if it.county else (find_county(text), "")
+        if not county:
+            return None
+        self.store.set_meta(f"askloc:{msg.author.id}", None)
+        self.store.set_meta(f"loc:{msg.author.id}", {"county": county, "town": town})
+        self.last_intent = Intent("location", county=county, town=town)
+        return [NeedWeather(county, msg.channel_id, reply_to=msg.message_id, town=town, mode=ask.get("mode", ""),
+                            rain_q=ask.get("rain", False))]
+
     def location(self, user_id: int | None, s: dict) -> tuple[str, str]:
         """這個人說過自己在哪；沒說過就用設定的縣市。"""
         loc = self.store.get_meta(f"loc:{user_id}") if user_id else None

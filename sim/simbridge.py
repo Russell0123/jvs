@@ -12,7 +12,7 @@ from reminderbot import rules, timeparse, weather
 from reminderbot.explain import describe, rules as logic_rules
 from reminderbot.core import Assistant, Edit, Incoming, NeedWeather, Purge, React, Send, User
 from reminderbot.settings import (COUNTIES, DEFAULTS, GROUPS, HINTS, LABELS, MULTILINE_KEYS, REPLY_GROUPS, REPLY_KEYS,
-                                  SETTING_KEYS, note_categories, validate, wish_lists)
+                                  SETTING_KEYS, FOOD_GROUPS, FOOD_KEYS, note_categories, validate, wish_lists)
 from reminderbot.store import MemoryStore
 
 TZ = timezone(timedelta(hours=8))
@@ -50,7 +50,7 @@ class Sim:
             "roles": [{"id": k, "name": v} for k, v in ROLES.items()],
             "bot": {"id": BOT_ID, "name": "jvs"},
             "channels": [{"id": k, "name": v} for k, v in CHANNELS.items()],
-            "defaults": DEFAULTS, "labels": LABELS, "hints": HINTS, "groups": GROUPS, "reply_groups": REPLY_GROUPS, "counties": COUNTIES,
+            "defaults": DEFAULTS, "labels": LABELS, "hints": HINTS, "groups": GROUPS + FOOD_GROUPS, "reply_groups": REPLY_GROUPS, "counties": COUNTIES,
             "multiline": MULTILINE_KEYS,
             "rule_choices": {"who": rules.WHO, "call": rules.CALL, "task": rules.TASK, "mode": rules.MODE},
             "rule_blank": rules.BLANK,
@@ -80,6 +80,9 @@ class Sim:
         res = self.core.press(custom_id, user, self.now, msg["channel"] if msg else CHANNEL)
         if res.edit_menu:
             return self.state(note="__edit__")      # 測試台：切到「提醒」分頁編輯
+        if res.content is not None and msg:
+            msg["text"], msg["buttons"] = res.content, [b.__dict__ for b in res.buttons]
+            return self.state()
         if res.ephemeral:
             self._add(author=BOT_ID, text=res.ephemeral, ephemeral_for=user.id, channel=msg["channel"] if msg else CHANNEL)
         elif msg:
@@ -117,12 +120,12 @@ class Sim:
         return self.state()
 
     def save_settings(self, form_json: str, page: str = "settings") -> str:
-        values, errors = validate(json.loads(form_json), REPLY_KEYS if page == "replies" else SETTING_KEYS)
+        values, errors = validate(json.loads(form_json), REPLY_KEYS if page == "replies" else SETTING_KEYS + FOOD_KEYS)
         self.store.save_settings(values)
         return self.state(note="；".join(errors) if errors else "已套用")
 
     def reset_settings(self, page: str = "settings") -> str:
-        self.store.save_settings({k: DEFAULTS[k] for k in (REPLY_KEYS if page == "replies" else SETTING_KEYS)})
+        self.store.save_settings({k: DEFAULTS[k] for k in (REPLY_KEYS if page == "replies" else SETTING_KEYS + FOOD_KEYS)})
         return self.state(note="已恢復預設")
 
     def slash(self, user_id: int, name: str, arg: str = "", channel: int = CHANNEL) -> str:
