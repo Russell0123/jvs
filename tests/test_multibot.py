@@ -288,3 +288,55 @@ def test_seed_append_keeps_custom_names():
     store.save_settings({"bot_names": "蔣寶,小蔣"})
     seed_profile(store, "jbao")
     assert store.settings()["bot_names"] == "蔣寶,小蔣,蔣萬安" and store.settings()["echo_enabled"]
+
+
+async def test_peer_messages_one_level(monkeypatch):
+    """同一支程式的 bot 互相看得到對方的訊息，但因為對方而講的話不會再被接（只連一層）。"""
+    from reminderbot import bot as botmod
+    monkeypatch.setattr(botmod, "PEER_WAIT", 0)
+    jvs_user, jbao_user, other_bot = SimpleNamespace(id=1, bot=True), SimpleNamespace(id=2, bot=True), \
+        SimpleNamespace(id=3, bot=True)
+    reached = []
+
+    def listens(cid):
+        reached.append(botmod.FROM_PEER.get())
+        return False                                   # 到這裡就代表會照一般流程處理
+    me = SimpleNamespace(user=jvs_user, peers={"jbao": SimpleNamespace(user=jbao_user)}, _listens_in=listens)
+    me._is_peer = lambda u: botmod.ReminderBot._is_peer(me, u)
+
+    async def got(author, mid):
+        reached.clear()
+        msg = SimpleNamespace(author=author, id=mid, channel=SimpleNamespace(id=1))
+        await botmod.ReminderBot.on_message(me, msg)
+        return list(reached)
+    assert await got(SimpleNamespace(id=9, bot=False), 10) == [False]     # 人講的照常
+    assert await got(jbao_user, 11) == [True]                              # 蔣寶講的：賈維斯會看
+    assert await got(other_bot, 12) == []                                  # 別的 bot：不理
+    assert await got(jvs_user, 13) == []                                   # 自己講的：不理
+    botmod.NO_CHAIN.append(14)
+    assert await got(jbao_user, 14) == []                                  # 蔣寶因為賈維斯才講的：不再接
+
+
+async def test_send_marks_no_chain():
+    from reminderbot import bot as botmod
+    n = iter(range(700, 800))
+
+    async def send(text, **kw):
+        return SimpleNamespace(id=next(n), channel=SimpleNamespace(id=1))
+
+    async def channel(cid):
+        return SimpleNamespace(send=send, guild=None)
+    me = SimpleNamespace(_channel=channel, emo=lambda t, g=None: t, _peer_mention=lambda t: t,
+                         core=SimpleNamespace(sent=lambda *a: None))
+
+    async def out(text, peer):
+        token = botmod.FROM_PEER.set(peer)
+        try:
+            await botmod.ReminderBot._send(me, Send(1, text), None)
+        finally:
+            botmod.FROM_PEER.reset(token)
+        return botmod.NO_CHAIN[-1] if botmod.NO_CHAIN else None
+    last = await out("嘿", False)
+    assert last != 700                                       # 回人的：別的 bot 可以接
+    assert await out("嘿", True) == 701                     # 因為別的 bot 才講的：不再接
+    assert await out("放心 {jvs}", False) == 702            # 轉介那句：賈維斯已經直接接手了

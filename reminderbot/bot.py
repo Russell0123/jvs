@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import collections
+import contextvars
 import io
 import logging
 import re
@@ -22,6 +24,11 @@ log = logging.getLogger(__name__)
 
 PINGS = discord.AllowedMentions(everyone=False, users=True, roles=True, replied_user=False)
 NO_PINGS = discord.AllowedMentions.none()
+# 同一支程式裡的 bot 會看彼此的訊息（蔣寶講「賈維斯…」賈維斯會回），但只連一層，不會互相無限接話：
+# 因為別的 bot 的訊息而講的話、還有轉介那句（已經直接交給賈維斯了），記在這裡，其他 bot 不理
+FROM_PEER: contextvars.ContextVar[bool] = contextvars.ContextVar("from_peer", default=False)
+NO_CHAIN: collections.deque = collections.deque(maxlen=500)
+PEER_WAIT = 0.8         # 等對方把訊息 ID 記好（Discord 的事件有時比送出的回應先到）
 # 說法裡的 :duzi: → <:duzi:ID>（bot 送 :名字: 不會自己變表情）；<:x:1>、<a:x:1>、12:30:00 不會被動到
 EMOJI_RE = re.compile(r"(?<![<\w])[:：]([A-Za-z0-9_]{2,32})[:：](?!\d)")
 STYLES = {"success": discord.ButtonStyle.success, "danger": discord.ButtonStyle.danger,
@@ -327,9 +334,18 @@ class ReminderBot(discord.Client):
         peer = self.peers.get("jvs")
         return text.replace("{jvs}", f"<@{peer.user.id}>" if peer is not None and peer.user else "賈維斯")
 
+    def _is_peer(self, user) -> bool:
+        return any(p.user is not None and p.user.id == user.id for p in self.peers.values())
+
     async def on_message(self, message: discord.Message):
         if message.author.bot:
-            return
+            # 只聽同一支程式裡的其他 bot，而且只連一層
+            if message.author.id == getattr(self.user, "id", None) or not self._is_peer(message.author):
+                return
+            await asyncio.sleep(PEER_WAIT)
+            if message.id in NO_CHAIN:
+                return
+            FROM_PEER.set(True)
         if not self._listens_in(message.channel.id):
             return
         # 回覆 bot 的訊息也算在跟 bot 講話（回覆時文字裡不會有 @，但 Discord 會帶上「回覆的是哪則」）
@@ -508,6 +524,8 @@ class ReminderBot(discord.Client):
                 kwargs["reference"] = discord.MessageReference(message_id=a.reply_to, channel_id=channel.id,
                                                                fail_if_not_exists=False)
             msg = await channel.send(text, **kwargs)
+        if FROM_PEER.get() or "{jvs}" in (a.text or ""):
+            NO_CHAIN.append(msg.id)
         if a.reminder_id:
             self.core.sent(a.reminder_id, msg.id, msg.channel.id)
 
