@@ -18,7 +18,8 @@ from . import timeparse, weather
 from .router import (REMINDER_RE, Intent, clean_reminder_text, extract_wishes, fuzzy_match, purge_label, purge_scope,
                      route)
 from . import food, rules
-from .settings import auto_reactions, find_county, phrases, split_pool, topics, wish_acks, wish_verb, yesno_regex
+from .settings import (auto_reactions, find_county, phrases, split_pool, topics, wish_acks, wish_lists, wish_verb,
+                       yesno_regex)
 
 EVERYONE = {"help", "weather", "location"}      # 「只有主人能交代事情」也開放給所有人的
 
@@ -210,6 +211,18 @@ class Assistant:
         self.home_channel_id = home_channel_id   # 提醒一律發到這個頻道（在哪裡 @ 都一樣）
         self.last_intent: Intent | None = None   # 測試網頁顯示「判斷結果」用
 
+    def migrate(self):
+        """一次性整理：清單只留想看、想畫、想買、備忘，其他清單和裡面記的東西刪掉。"""
+        if self.store.get_meta("_lists_v2"):
+            return
+        from .settings import DEFAULTS
+        self.store.save_settings({"wish_lists": DEFAULTS["wish_lists"], "note_categories": DEFAULTS["note_categories"]})
+        keep = {n for n, _ in wish_lists(self.store.settings())} | {"備忘"}
+        for n in self.store.all_notes(100000):
+            if n["category"] not in keep:
+                self.store.delete_note(n["id"])
+        self.store.set_meta("_lists_v2", 1)
+
     def _home(self, msg: Incoming) -> int:
         return self.home_channel_id or msg.channel_id
 
@@ -271,6 +284,9 @@ class Assistant:
     def handle(self, msg: Incoming, now: datetime) -> list:
         """自訂規則先比對：「取代」就只回規則的；「另外回」就原本的照做再補一則。"""
         s = self.store.settings()
+        if not s["respond"]:
+            self.last_intent = None
+            return []
         reacts = self.reactions(msg, s)
         if (back := self._food_complaint(msg, now, s)) is not None:
             return reacts + back
@@ -1193,6 +1209,8 @@ class Assistant:
 
     def tick(self, now: datetime, default_channel_id: int | None = None) -> list:
         s = self.store.settings()
+        if not s["respond"]:
+            return []
         ts = int(now.timestamp())
         rng = random.Random(ts)
         actions: list = []

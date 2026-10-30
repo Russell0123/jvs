@@ -5,4 +5,6 @@ Description=jvs 資料庫和圖片備份
 Type=oneshot
 User=jvs
 WorkingDirectory=/opt/jvs
-ExecStart=/bin/sh -c 'sqlite3 data/bot.db ".backup data/backups/bot-$(date +%%F).db" && find data/backups -name "bot-*.db" -mtime +14 -delete; if [ -d data/images ]; then tar czf data/backups/images.tgz -C data images; fi'
+# 每個 bot 的資料庫（bot.db、jbao.db…）各備份一份，留 14 天；圖片（images、images-<代號>）打包成一個檔
+# systemd 會展開 $，所以 shell 的變數寫成 $$
+ExecStart=/bin/sh -c 'for db in data/*.db; do n=$$(basename "$$db" .db); sqlite3 "$$db" ".backup data/backups/$$n-$$(date +%%F).db"; done; find data/backups -name "*-20*.db" -mtime +14 -delete; cd data && dirs=$$(ls -d images images-* 2>/dev/null); if [ -n "$$dirs" ]; then tar czf backups/images.tgz $$dirs; fi'

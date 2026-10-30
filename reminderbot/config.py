@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 try:
@@ -31,6 +32,13 @@ class Config:
     owner_id: int | None           # 你的 Discord 使用者 ID：沒 @ 也會記錄你的「我想畫…」
     web_user: str = "admin"        # 設定網頁的帳號
     public_url: str = ""           # 設定網頁的公開網址（/設定 的按鈕會連過去）
+    key: str = "jvs"               # 同一支程式可以跑好幾個 bot：各自的代號、名字
+    name: str = "賈維斯"
+    slash: bool = True             # 要不要註冊 / 指令
+
+
+# 其他 bot：.env 填了 <代號>_DISCORD_TOKEN 就會一起跑，資料庫、圖庫、設定各自分開
+OTHER_BOTS = [("jbao", "蔣寶")]
 
 
 def load() -> Config:
@@ -55,3 +63,19 @@ def load() -> Config:
         public_url=os.environ.get("WEB_PUBLIC_URL", "").strip(),
         owner_id=int(os.environ["OWNER_ID"]) if os.environ.get("OWNER_ID", "").strip().isdigit() else None,
     )
+
+
+def load_bots(main: Config) -> list[Config]:
+    """主要的 bot（賈維斯）＋ .env 有填 token 的其他 bot。"""
+    out = [main]
+    data_dir = Path(main.db_path).parent
+    for key, name in OTHER_BOTS:
+        token = os.environ.get(f"{key.upper()}_DISCORD_TOKEN", "").strip()
+        if not token:
+            continue
+        raw = os.environ.get(f"{key.upper()}_CHANNEL_IDS", "").strip()
+        channels = _ids(raw) if raw else main.channel_ids
+        first = int(raw.replace(" ", "").split(",")[0]) if raw else main.reminder_channel_id
+        out.append(replace(main, key=key, name=name, discord_token=token, channel_ids=channels,
+                           reminder_channel_id=first, db_path=str(data_dir / f"{key}.db"), slash=False))
+    return out

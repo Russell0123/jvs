@@ -14,7 +14,9 @@ TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".gif": "image/gif", ".webp"
 
 
 def folder(db_path: str) -> Path:
-    return Path(db_path).resolve().parent / "images"
+    """賈維斯（bot.db）的圖在 data/images，其他 bot 各自在 data/images-<代號>。"""
+    p = Path(db_path).resolve()
+    return p.parent / ("images" if p.stem == "bot" else f"images-{p.stem}")
 
 
 def kind(data: bytes) -> str:

@@ -61,7 +61,7 @@ async def test_button_writes_trigger_and_blocks_repeat(tmp_path, monkeypatch):
         assert r.status == 303 and r.headers["Location"] == "/update"
         assert (data / "update-request").exists()
         html = await (await client.get("/update")).text()
-        assert "更新中" in html and "disabled" in html
+        assert "更新中" in html and "<button disabled" in html
         r = await client.post("/update", allow_redirects=False)                  # 重複按
         assert "busy=1" in r.headers["Location"]
         assert "正在更新" in await (await client.get("/update?busy=1")).text()
@@ -79,7 +79,7 @@ async def test_status_display(tmp_path, monkeypatch):
         (data / "update.log").write_text("第一行\nTraceback: 壞了\n")
         html = await (await client.get("/update")).text()
         assert "❌" in html and "已退回" in html and "aaaaaaa → bbbbbbb" in html and "Traceback: 壞了" in html
-        assert "disabled" not in html
+        assert "<button disabled" not in html
         # 正在跑的狀態：按鈕停用；跑太久（超過 20 分鐘）就當作停了
         (data / "update-status.json").write_text(json.dumps({"state": "running", "started": now}))
         assert updater.running(data) and not updater.request(data)

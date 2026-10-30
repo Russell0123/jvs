@@ -89,6 +89,32 @@ cd ~/jvs && git pull && sudo bash deploy/install.sh
 
 資料庫每天凌晨 4 點自動備份到 `/opt/jvs/data/backups/`，保留 14 天；上傳的圖片打包成 `images.tgz`。更新程式時 `/opt/jvs/data/` 整個不會動。
 
+## 4.5 加第二個 bot（蔣寶）
+
+蔣寶和賈維斯跑在同一支程式、同一台主機，共用一個設定網頁（最左邊的圓圈切換），但設定、提醒、清單、規則、圖片都各自分開。它一開始**什麼都不回**，之後要加功能再開。
+
+1. [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**，名字填「蔣寶」→ Create
+2. 左邊 **Bot**：
+   - 按 **Reset Token** → 複製 token（只會顯示一次）
+   - 往下打開 **Message Content Intent** → Save Changes
+   - 想換頭像可以在這頁上傳
+3. 左邊 **OAuth2** → 複製 **Client ID**，把下面網址的 `CLIENT_ID` 換掉，用瀏覽器打開邀請到伺服器：
+   ```
+   https://discord.com/oauth2/authorize?client_id=CLIENT_ID&scope=bot+applications.commands&permissions=388160
+   ```
+4. 在主機上把 token 填進 `.env`，重啟：
+   ```bash
+   sudo nano /opt/jvs/.env
+   # 在最後加一行（等號後面貼 token，前後不要有空白）：
+   # JBAO_DISCORD_TOKEN=貼上蔣寶的token
+   # 想讓蔣寶只在某些頻道：再加 JBAO_CHANNEL_IDS=頻道ID
+   sudo systemctl restart jvs
+   journalctl -u jvs -n 30 --no-pager   # 看到「蔣寶 已登入」就成功了
+   ```
+5. 打開設定網頁，最左邊多一個「蔣」，點進去就是蔣寶自己的設定。「設定 → 功能 → 回應訊息」打開才會開始回話。
+
+token 錯了只會讓蔣寶不跑，賈維斯照常；紀錄裡會寫「蔣寶 的 token 不對」。
+
 ## 5. 設定網頁
 
 ### 最簡單：公開網址＋帳密（不用網域）

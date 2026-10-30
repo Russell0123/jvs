@@ -7,6 +7,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sim"))
 
 from simbridge import Sim  # noqa: E402
 
+from oldlists import OLD_LISTS  # noqa: E402
+
 START = 1793268000000   # 2026-10-29 週四 18:00 台灣時間
 
 # (句子, 判斷, 判斷細節裡要出現的字)
@@ -77,6 +79,7 @@ CASES = [
 
 def test_sixty_sentences():
     sim = Sim(START)
+    sim.store.save_settings(OLD_LISTS)
     problems = []
     for text, kind, detail in CASES:
         if text.startswith("⏩"):
@@ -91,6 +94,7 @@ def test_sixty_sentences():
 
 def test_snoozes_hit_the_latest_fired_reminder():
     sim = Sim(START)
+    sim.store.save_settings(OLD_LISTS)
     sim.say(1, "十分鐘後提醒我關瓦斯")
     sim.advance(15 * 60)
     st = json.loads(sim.say(1, "這個提醒延到明天早上"))

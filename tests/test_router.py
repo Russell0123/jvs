@@ -6,12 +6,16 @@ import pytest
 from reminderbot.router import route
 from reminderbot.settings import DEFAULTS
 
+from oldlists import OLD_LISTS
+
+S = {**DEFAULTS, **OLD_LISTS}
+
 TZ = ZoneInfo("Asia/Taipei")
 NOW = datetime(2026, 10, 29, 14, 0, tzinfo=TZ)
 
 
 def r(text):
-    return route(text, NOW, DEFAULTS)
+    return route(text, NOW, S)
 
 
 @pytest.mark.parametrize("text,body", [

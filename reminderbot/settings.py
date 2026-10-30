@@ -8,6 +8,7 @@ from .food import DEFAULT_LIBRARY, DEFAULT_QUESTIONS
 
 DEFAULTS: dict = {
     # 功能開關
+    "respond": True,                 # 總開關：關掉就完全不理人（不回話、不按表符、不發天氣）
     "feature_reminder": True,
     "feature_note": True,
     "feature_timer": True,
@@ -124,13 +125,9 @@ DEFAULTS: dict = {
 
     # 願望清單：聊天裡說「我想畫…」「之後想買…」「有點想追…」就自動記下來
     # 一行一個清單：「清單名稱：動詞,動詞」
-    "wish_lists": "想畫：畫畫,畫\n"
-                  "想看：看,追,讀,聽\n"
-                  "想買：買,入手,敗\n"
-                  "想學：學,練\n"
-                  "想去：去,逛,玩\n"
-                  "想吃：吃,喝\n"
-                  "想做：做,規劃,試試,試,寫,弄,煮",
+    "wish_lists": "想看：看,追,讀,聽\n"
+                  "想畫：畫畫,畫\n"
+                  "想買：買,入手,敗",
     "wish_listen_ids": "",           # 沒 @ 也會記錄誰的願望（成員 ID，逗號分隔；空白 = 只有 OWNER_ID）
     "passive_ack": True,             # 沒 @ 時記下來要不要回一句
     # 記下願望時的回覆：一行一個清單「清單名稱：回覆/回覆」，「*」是其他清單
@@ -141,14 +138,12 @@ DEFAULTS: dict = {
     "suggest_phrases": "可以{verb}這些：\n挑了幾個：\n試試這些？",
 
     # 記事分類（說「記住…」「記一下…」時用）：一行一類，最後一行是沒對到時的預設分類
-    "note_categories": "靈感：靈感,點子,想法,idea,突然想到\n"
-                       "主題：主題,題目\n"
-                       "備忘：",
+    "note_categories": "備忘：",
 }
 
 # 設定網頁、測試網頁共用的欄位名稱
 LABELS = {
-    "feature_reminder": "提醒", "feature_note": "願望清單、記事", "feature_timer": "計時",
+    "respond": "回應訊息：關掉就完全不理人", "feature_reminder": "提醒", "feature_note": "願望清單、記事", "feature_timer": "計時",
     "feature_weather": "天氣", "feature_mention_others": "提醒別人",
     "all_channels": "所有頻道都回應（提醒發到提醒頻道）",
     "owner_only": "只有主人能叫它做事", "bot_names": "叫它的名字（逗號分隔，含錯字）",
@@ -201,7 +196,7 @@ LABELS = {
 HINTS: dict = {}
 # 設定頁
 GROUPS = [
-    ("功能", ["feature_reminder", "feature_note", "feature_timer", "feature_weather", "feature_mention_others",
+    ("功能", ["respond", "feature_reminder", "feature_note", "feature_timer", "feature_weather", "feature_mention_others",
             "all_channels"]),
     ("叫它", ["owner_only", "bot_names", "greet_words", "greet_rare_percent", "greet_image_percent",
             "yesno_patterns"]),
@@ -216,7 +211,6 @@ GROUPS = [
     ("天氣變化通知", ["weather_alert_enabled", "weather_check_minutes", "weather_alert_hours", "weather_quiet"]),
     ("清單", ["wish_lists", "wish_listen_ids", "passive_ack", "suggest_count", "suggest_half_life_days",
             "note_categories"]),
-    ("自動按表符", ["auto_reactions"]),
     ("其他", ["show_exact_time"]),
 ]
 # 回覆頁：bot 會說的每一句話
@@ -240,6 +234,9 @@ REPLY_GROUPS = [
 # 吃什麼頁：問題樹和食物庫
 FOOD_GROUPS = [("吃什麼", ["food_triggers", "food_reject_words", "food_questions", "food_library"])]
 FOOD_KEYS = [k for _, keys in FOOD_GROUPS for k in keys]
+# 表情符號頁：看到關鍵字自動按表符
+REACTION_GROUPS = [("自動按表符", ["auto_reactions"])]
+REACTION_KEYS = ["auto_reactions"]
 REPLY_KEYS = [k for _, keys in REPLY_GROUPS for k in keys]
 SETTING_KEYS = [k for _, keys in GROUPS for k in keys]
 MULTILINE_KEYS = [k for k, v in DEFAULTS.items() if isinstance(v, str) and "\n" in v] + \
@@ -343,6 +340,19 @@ def _lines(raw) -> list[tuple[str, list[str]]]:
         kws = re.split(r"[,，、]", parts[1]) if len(parts) > 1 else []
         out.append((parts[0].strip(), [k.strip() for k in kws if k.strip()]))
     return out
+
+
+# 各個 bot 第一次啟動時的設定（之後在網頁改）。蔣寶先完全不反應，功能之後再開。
+PROFILE_SEEDS: dict[str, dict] = {
+    "jbao": {"respond": False, "bot_names": "蔣寶,jbao", "auto_reactions": "", "weather_daily_enabled": False,
+             "weather_alert_enabled": False, "passive_ack": False},
+}
+
+
+def seed_profile(store, key: str):
+    if store.get_meta("_profile") is None:
+        store.save_settings(PROFILE_SEEDS.get(key, {}))
+        store.set_meta("_profile", key)
 
 
 def validate(form: dict, keys=None) -> tuple[dict, list[str]]:

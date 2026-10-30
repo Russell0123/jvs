@@ -137,6 +137,8 @@ def test_mention_others_and_roles(core):
 
 
 def test_timer_notes_lists(core):
+    from oldlists import OLD_LISTS
+    core.store.save_settings(OLD_LISTS)
     chat = Chat(core)
     [(_, c)] = chat.say(ME, "計時 25 分鐘")
     assert short(c.text)
@@ -672,7 +674,7 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 
 
 async def test_web_images(tmp_path):
-    cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path=str(tmp_path / "i.db"), tz=TZ,
+    cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path=str(tmp_path / "bot.db"), tz=TZ,
                  web_host="127.0.0.1", web_port=0, admin_email="", web_password="", owner_id=7,
                  reminder_channel_id=1)
     store = SqliteStore(cfg.db_path)
@@ -745,7 +747,7 @@ def test_rule_image_and_validation(core):
 async def test_web_rules(tmp_path):
     from aiohttp import FormData
     from reminderbot import rules
-    cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path=str(tmp_path / "r.db"), tz=TZ,
+    cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path=str(tmp_path / "bot.db"), tz=TZ,
                  web_host="127.0.0.1", web_port=0, admin_email="", web_password="", owner_id=7,
                  reminder_channel_id=1)
     store = SqliteStore(cfg.db_path)
@@ -881,7 +883,7 @@ def test_weather_for_everyone(core):
 
 async def test_web_replace_lost_image(tmp_path):
     from aiohttp import FormData
-    cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path=str(tmp_path / "l.db"), tz=TZ,
+    cfg = Config(discord_token="x", channel_ids={1}, cwa_api_key="", db_path=str(tmp_path / "bot.db"), tz=TZ,
                  web_host="127.0.0.1", web_port=0, admin_email="", web_password="", owner_id=7,
                  reminder_channel_id=1)
     store = SqliteStore(cfg.db_path)

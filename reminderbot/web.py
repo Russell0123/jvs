@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import base64
+import contextvars
 import hmac
 import logging
+import re
 from datetime import datetime
 from html import escape
 from urllib.parse import urlencode, urlparse
@@ -14,70 +16,202 @@ from . import food, images, rules, timeparse, updater
 from .explain import describe, rules as logic_rules
 from .core import IMG_TOKEN, NO_IMAGE
 from .router import route
-from .settings import (COUNTIES, DEFAULTS, FOOD_GROUPS, FOOD_KEYS, GROUPS, LABELS, MULTILINE_KEYS, REPLY_GROUPS,
-                       REPLY_KEYS, SETTING_KEYS, note_categories, validate, wish_lists)
+from .settings import (COUNTIES, DEFAULTS, FOOD_GROUPS, FOOD_KEYS, GROUPS, LABELS, MULTILINE_KEYS, REACTION_GROUPS,
+                       REACTION_KEYS, REPLY_GROUPS, REPLY_KEYS, SETTING_KEYS, note_categories, validate, wish_lists)
 
 log = logging.getLogger(__name__)
 
 STATUS = {"pending": "等待中", "fired": "已響・未完成", "done": "已完成", "cancelled": "已取消", "expired": "已過期"}
 
 CSS = """
-:root{--bg:#f6f7f9;--card:#fff;--fg:#1d2330;--muted:#6b7280;--line:#e3e6eb;--accent:#5865f2;--danger:#d14343}
-@media (prefers-color-scheme:dark){:root{--bg:#16181d;--card:#1f2229;--fg:#e6e8ec;--muted:#9aa1ad;--line:#2e323b;--accent:#7b85ff;--danger:#ff6b6b}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,"Noto Sans TC","PingFang TC",sans-serif}
-header{background:var(--card);border-bottom:1px solid var(--line);padding:12px 16px;display:flex;gap:16px;align-items:center}header nav{display:flex;overflow-x:auto;white-space:nowrap;min-width:0;scrollbar-width:none}
-header b{font-size:17px}nav a{color:var(--muted);text-decoration:none;margin-right:14px}nav a.on{color:var(--accent);font-weight:600}
-main{max-width:860px;margin:0 auto;padding:16px}
-section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
-h2{font-size:16px;margin:0 0 12px}label{display:block;margin:10px 0 4px;color:var(--muted);font-size:13px}
-input[type=text],input[type=number],select,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);font:inherit}
-textarea{min-height:96px}.check{display:flex;gap:8px;align-items:center;margin:8px 0;color:var(--fg);font-size:15px}
+:root{--rail:#1e1f22;--side:#2b2d31;--bg:#313338;--card:#2b2d31;--input:#1e1f22;--fg:#dbdee1;--head:#f2f3f5;
+--muted:#949ba4;--line:#3f4147;--accent:#5865f2;--accent-h:#4752c4;--danger:#da373c;--ok:#23a559;--hover:#35373c;
+--sel:#404249;--link:#00a8fc}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:15px/1.5 "gg sans","Noto Sans TC","Microsoft JhengHei","PingFang TC",system-ui,sans-serif}
+a{color:var(--link)}
+.app{display:flex;height:100vh}
+.rail{width:72px;flex:none;background:var(--rail);display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 0;overflow-y:auto}
+.rail a{position:relative;width:48px;height:48px;border-radius:50%;background:var(--bg);color:var(--head);display:flex;
+align-items:center;justify-content:center;font-weight:700;font-size:18px;text-decoration:none;transition:border-radius .15s,background .15s}
+.rail a:hover,.rail a.on{border-radius:16px;background:var(--accent);color:#fff}
+.rail a.on::before{content:"";position:absolute;left:-12px;top:4px;width:4px;height:40px;border-radius:0 4px 4px 0;background:var(--head)}
+.rail .sep{width:32px;height:2px;background:var(--line);border-radius:1px}
+.side{width:240px;flex:none;background:var(--side);display:flex;flex-direction:column;overflow-y:auto}
+.side-head{height:48px;flex:none;padding:0 16px;display:flex;align-items:center;font-weight:700;color:var(--head);box-shadow:0 1px 0 rgba(0,0,0,.25)}
+.side nav{padding:8px}
+.cat{margin:16px 8px 4px;font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.02em}
+.side nav a{display:flex;gap:6px;align-items:center;padding:6px 8px;margin:1px 0;border-radius:4px;color:var(--muted);text-decoration:none;font-weight:500}
+.side nav a::before{content:"#";font-size:20px;line-height:1;color:#80848e;width:20px;text-align:center}
+.side nav a:hover{background:var(--hover);color:var(--fg)}.side nav a.on{background:var(--sel);color:var(--head)}
+.col{flex:1;min-width:0;display:flex;flex-direction:column}
+.top{height:48px;flex:none;display:flex;align-items:center;gap:8px;padding:0 16px;box-shadow:0 1px 0 rgba(0,0,0,.25);z-index:1}
+.top .hash{color:#80848e;font-size:24px;font-weight:300}.top b{color:var(--head);font-size:16px}.top .sp{flex:1}
+.upd{display:flex;gap:8px;align-items:center;margin:0}.upd a{font-size:12px;color:var(--muted);text-decoration:none}
+.upd button{padding:4px 12px;font-size:13px}.upd button.new{background:var(--ok)}
+main{flex:1;overflow-y:auto;padding:16px 16px 48px}.inner{max-width:880px}
+section{background:var(--card);border-radius:8px;padding:12px 16px;margin-bottom:8px}
+h2{font-size:15px;margin:0;color:var(--head);font-weight:600}
+section.fold>h2{cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px;margin:-12px -16px;padding:12px 16px}
+section.fold>h2::before{content:"›";color:var(--muted);font-size:20px;line-height:1;transition:transform .15s;width:10px}
+section.fold.open>h2::before{transform:rotate(90deg)}section.fold.open>h2{margin-bottom:4px}
+section.fold:not(.open)>:not(h2){display:none}section.fold>h2:hover{color:#fff}
+section:not(.fold)>h2{margin-bottom:12px}
+label{display:block;margin:12px 0 6px;color:var(--muted);font-size:12px;font-weight:700}
+input[type=text],input[type=number],select,textarea{width:100%;padding:9px 10px;border:0;border-radius:4px;background:var(--input);color:var(--fg);font:inherit}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:0}
+textarea{min-height:96px;resize:vertical}.check{display:flex;gap:8px;align-items:center;margin:10px 0;color:var(--fg);font-size:15px;font-weight:400}
+input[type=checkbox]{accent-color:var(--accent);width:18px;height:18px}
 .hint{color:var(--muted);font-size:12px;margin-top:2px}
-button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:9px 16px;font:inherit;cursor:pointer}
-button.small{padding:4px 10px;font-size:13px}button.danger{background:var(--danger)}button.ghost{background:transparent;color:var(--accent);border:1px solid var(--accent)}
-.btnrow{margin-top:12px}.bar{position:sticky;bottom:0;background:var(--bg);padding:12px 0;display:flex;gap:10px}
-.flash{padding:10px 14px;border-radius:8px;margin-bottom:16px;background:color-mix(in srgb,var(--accent) 15%,transparent)}
-.flash.err{background:color-mix(in srgb,var(--danger) 18%,transparent)}
+button{background:var(--accent);color:#fff;border:0;border-radius:4px;padding:8px 16px;font:inherit;font-weight:500;cursor:pointer}
+button:hover{background:var(--accent-h)}button:disabled{opacity:.5;cursor:not-allowed}
+button.small{padding:3px 10px;font-size:13px}button.danger{background:var(--danger)}
+button.ghost{background:#4e5058;color:#fff}button.ghost:hover{background:#6d6f78}
+.btnrow{margin-top:12px}.bar{position:sticky;bottom:-48px;background:var(--bg);padding:12px 0 56px;margin-bottom:-48px;display:flex;gap:10px;z-index:1}
+.flash{padding:10px 14px;border-radius:8px;margin-bottom:12px;background:rgba(88,101,242,.18);border-left:4px solid var(--accent)}
+.flash.err{background:rgba(218,55,60,.15);border-left-color:var(--danger)}
 table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
-th{color:var(--muted);font-weight:500;white-space:nowrap}.wrap table{min-width:600px}td:first-child,td:nth-child(2){white-space:nowrap}.tag{font-size:12px;color:var(--muted)}.wrap{overflow-x:auto}
-.filters{display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:10px}.filters a{color:var(--muted)}.rowform{display:flex;gap:6px;align-items:center;margin:0 0 6px}.rowform input[type=text]{flex:1;min-width:8em}.rowform select{width:auto}.filters a.on{color:var(--accent);font-weight:600}
-.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px}.gallery figure{margin:0}
-.gallery .code{display:block;background:none;border:0;padding:0 0 4px;color:var(--muted);font:12px ui-monospace,monospace;cursor:pointer}.gallery .code[data-ok]{color:var(--accent)}
-.gallery .lost{aspect-ratio:1;border:1px dashed var(--line);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-size:12px;color:var(--muted);margin-bottom:4px}
-.gallery .lost label{cursor:pointer;color:var(--accent);border:1px solid var(--accent);border-radius:6px;padding:3px 8px}.gallery .lost input{display:none}
-.rulelist{list-style:none;margin:0;padding:0}.rulelist li{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px;background:var(--card)}
-.rulelist li.off summary b,.rulelist li.off .kw{opacity:.45}.rulelist li.dragging{opacity:.6;border-color:var(--accent)}
-.rulelist .handle{cursor:grab;touch-action:none;user-select:none;color:var(--muted);padding:2px 2px;line-height:1.4}
-.rulelist .rtoggle{margin-top:4px;flex:none;width:auto}.rulelist details{flex:1;min-width:0}.rulelist summary{cursor:pointer;line-height:1.5}
-.rulelist summary .kw{color:var(--accent);margin-left:6px;font-size:14px;overflow-wrap:anywhere}.rulelist summary .tag{display:block}
-.newrule{margin-bottom:12px}.newrule summary{cursor:pointer;font-weight:600;color:var(--accent)}.toast{font-size:13px;color:var(--accent);margin-left:10px;font-weight:400}
-.badge{background:var(--accent);color:#fff;border-radius:6px;padding:1px 8px;font-size:12px;font-weight:600}
-pre.log{white-space:pre-wrap;font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;max-height:320px;overflow:auto}
+th{color:var(--muted);font-weight:600;font-size:12px;white-space:nowrap}.wrap table{min-width:600px}td:first-child,td:nth-child(2){white-space:nowrap}
+.tag{font-size:12px;color:var(--muted)}.wrap{overflow-x:auto}p.tag{margin:0 0 10px}
+.filters{display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:10px}.filters a{color:var(--muted);text-decoration:none}.filters a.on{color:var(--head);font-weight:600}
+.rowform{display:flex;gap:6px;align-items:center;margin:0 0 6px}.rowform input[type=text]{flex:1;min-width:8em}.rowform select{width:auto}
+code{background:var(--input);border-radius:4px;padding:1px 5px;font-size:13px}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;margin-top:8px}.gallery figure{margin:0}
 .gallery img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:block;margin-bottom:4px}
+.gallery .code{display:block;background:none;border:0;padding:0 0 4px;color:var(--muted);font:12px ui-monospace,monospace;cursor:pointer}.gallery .code[data-ok]{color:var(--link)}
+.gallery .lost{aspect-ratio:1;border:1px dashed var(--line);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-size:12px;color:var(--muted);margin-bottom:4px}
+.gallery .lost label{margin:0;cursor:pointer;color:#fff;background:#4e5058;border-radius:4px;padding:3px 8px}.gallery .lost input{display:none}
+.rulelist{list-style:none;margin:8px 0 0;padding:0}
+.rulelist li{display:flex;gap:8px;align-items:flex-start;border-radius:6px;padding:8px 10px;margin-bottom:4px;background:var(--bg)}
+.rulelist li:hover{background:var(--hover)}.rulelist li.off summary b,.rulelist li.off .kw{opacity:.45}
+.rulelist li.dragging{opacity:.7;outline:2px solid var(--accent)}
+.rulelist .handle{cursor:grab;touch-action:none;user-select:none;color:var(--muted);padding:2px;line-height:1.4}
+.rulelist .rtoggle{margin-top:3px;flex:none}.rulelist details{flex:1;min-width:0}.rulelist summary{cursor:pointer;line-height:1.5;color:var(--head)}
+.rulelist summary .kw{color:var(--link);margin-left:6px;font-size:14px;overflow-wrap:anywhere}.rulelist summary .tag{display:block}
+.newrule summary{cursor:pointer;font-weight:600;color:var(--head)}.toast{font-size:13px;color:var(--ok);margin-left:10px;font-weight:400}
+.badge{background:var(--ok);color:#fff;border-radius:4px;padding:1px 8px;font-size:12px;font-weight:600}
+pre.log{white-space:pre-wrap;font-size:12px;background:var(--input);border-radius:6px;padding:8px;max-height:320px;overflow:auto}
+details>summary{list-style:none}details>summary::-webkit-details-marker{display:none}
+.rulelist details>summary::before,.newrule summary::before{content:"› ";color:var(--muted)}
+.rulelist details[open]>summary::before,.newrule details[open] summary::before{content:"⌄ "}
+@media (max-width:760px){
+.app{flex-direction:column;height:auto;min-height:100%}
+.rail{width:auto;flex-direction:row;padding:8px 12px;overflow-x:auto}.rail a{width:40px;height:40px;font-size:16px}
+.rail a.on::before{display:none}.rail .sep{width:2px;height:28px}
+.side{width:auto;overflow:visible}.side-head{display:none}
+.side nav{display:flex;gap:2px;overflow-x:auto;white-space:nowrap;padding:6px 8px;align-items:center}
+.cat{margin:0 4px 0 10px;font-size:11px}.side nav a{padding:4px 8px}.side nav a::before{font-size:16px;width:12px}
+.top{position:sticky;top:0;background:var(--bg)}main{overflow:visible}.bar{bottom:0;padding-bottom:12px;margin-bottom:0}}
 """
 
 
+NAV_ITEMS = [("記憶", [("reminders", "/reminders", "提醒"), ("notes", "/notes", "清單")]),
+             ("回覆", [("replies", "/replies", "預設回覆"), ("rules", "/rules", "自訂回覆"), ("food", "/food", "吃什麼"),
+                     ("reactions", "/reactions", "表情符號")]),
+             ("設定", [("settings", "/", "設定"), ("logic", "/logic", "判斷")])]
+
+PAGE_JS = """<script>
+(() => {
+  const B = document.body.dataset.base || "";
+  // 每個區塊預設摺起來，點標題展開；這次瀏覽中打開過的會記住
+  const hash = location.hash ? document.querySelector(location.hash) : null;
+  const secs = [...document.querySelectorAll("main section")].filter(x => x.firstElementChild && x.firstElementChild.tagName === "H2");
+  for (const sec of secs) {
+    const h = sec.firstElementChild;
+    sec.classList.add("fold");
+    const key = "fold:" + location.pathname + ":" + h.textContent.replace(/[（(].*$/, "");
+    let open = false;
+    try { open = sessionStorage.getItem(key) === "1"; } catch (e) {}
+    if (hash && (sec === hash || sec.contains(hash))) open = true;
+    if (secs.length === 1) open = true;           // 只有一塊就直接打開
+    sec.classList.toggle("open", open);
+    h.addEventListener("click", e => {
+      if (e.target.closest("button,a,input")) return;
+      const now = sec.classList.toggle("open");
+      try { sessionStorage.setItem(key, now ? "1" : "0"); } catch (e) {}
+    });
+  }
+  if (hash) hash.scrollIntoView();
+  // 右上角一鍵更新
+  const btn = document.getElementById("updbtn"), info = document.getElementById("updinfo");
+  if (!btn) return;
+  const load = () => fetch(B + "/update.json").then(r => r.json()).then(d => {
+    btn.classList.toggle("new", !!d.newer);
+    if (d.running) { btn.disabled = true; btn.textContent = "⏳ 更新中…"; setTimeout(load, 10000); }
+    else { btn.disabled = false; btn.textContent = d.newer ? "⬆ 有新版本，一鍵更新" : "一鍵更新"; }
+    info.textContent = d.current ? (d.newer && d.latest ? d.current + " → " + d.latest : d.current) : "";
+    info.title = d.last || "";
+  }).catch(() => {});
+  load();
+})();
+</script>"""
+
+
 def page(title: str, active: str, body: str, flash: str = "", error: bool = False) -> web.Response:
-    nav = "".join(f'<a href="{href}" class="{"on" if key == active else ""}">{name}</a>'
-                  for key, href, name in [("reminders", "/reminders", "提醒"), ("notes", "/notes", "清單"),
-                                          ("replies", "/replies", "回覆"), ("rules", "/rules", "規則"),
-                                          ("food", "/food", "吃什麼"),
-                                          ("images", "/images", "圖片"),
-                                          ("logic", "/logic", "判斷"), ("update", "/update", "更新"),
-                                          ("settings", "/", "設定")])
+    nav = NAV.get()
+    prefix = nav["prefix"]
+    rail = "".join(f"<a href='{pre or ''}/' class='{'on' if key == nav['key'] else ''}' title='{escape(name)}'>"
+                   f"{escape(name[:1])}</a>" for key, name, pre in nav["bots"]) or "<a class='on'>賈</a>"
+    side = "".join(f"<div class='cat'>{cat}</div>" + "".join(
+        f"<a href='{href}' class='{'on' if key == active else ''}'>{name}</a>" for key, href, name in items)
+        for cat, items in NAV_ITEMS)
     fl = f'<div class="flash{" err" if error else ""}">{flash}</div>' if flash else ""
+    upd = ("<form class='upd' method='post' action='/update' onsubmit=\"return confirm('更新到 GitHub 上最新的版本？"
+           "會重新啟動，大約 1 分鐘；新版起不來會自動退回。')\"><a id='updinfo' href='/update'></a>"
+           "<button id='updbtn'>一鍵更新</button></form>")
     html = (f"<!doctype html><html lang='zh-Hant'><head><meta charset='utf-8'>"
-            f"<meta name='viewport' content='width=device-width,initial-scale=1'><title>{escape(title)}</title>"
-            f"<style>{CSS}</style></head><body><header><b>jvs</b><nav>{nav}</nav></header>"
-            f"<main>{fl}{body}</main></body></html>")
+            f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            f"<title>{escape(title)}・{escape(nav['name'] or 'jvs')}</title><style>{CSS}</style></head>"
+            f"<body data-base='{prefix}'><div class='app'><nav class='rail'>{rail}</nav>"
+            f"<aside class='side'><div class='side-head'>{escape(nav['name'] or '賈維斯')}</div><nav>{side}</nav></aside>"
+            f"<div class='col'><header class='top'><span class='hash'>#</span><b>{escape(title)}</b>"
+            f"<span class='sp'></span>{upd}</header>"
+            f"<main><div class='inner'>{fl}{body}</div></main></div></div>{PAGE_JS}</body></html>")
+    if prefix:      # 在別的 bot 底下：站內連結都加上 /b/<代號>
+        html = re.sub(r"""((?:href|action|src)=['"])/(?!/|b/)""", rf"\1{prefix}/", html)
     return web.Response(text=html, content_type="text/html")
 
 
-def make_app(bot) -> web.Application:
-    cfg = bot.config
+# 同一個網頁管好幾個 bot：網址 /b/<代號>/... 是那個 bot，沒有前綴的是第一個（賈維斯）。
+# 每個請求開始時把「現在是哪個 bot」放進 contextvar，下面的程式照舊用 bot.xxx 就會拿到對的那個。
+CURRENT: contextvars.ContextVar = contextvars.ContextVar("bot")
+NAV: contextvars.ContextVar = contextvars.ContextVar("nav", default={"prefix": "", "bots": [], "key": "", "name": ""})
+
+
+class _CurrentBot:
+    def __getattr__(self, name):
+        return getattr(CURRENT.get(), name)
+
+
+def make_app(bots) -> web.Application:
+    bots = list(bots) if isinstance(bots, (list, tuple)) else [bots]
+    cfg = bots[0].config                      # 帳密、更新：大家共用
+    prefixes = {b.config.key: ("" if i == 0 else f"/b/{b.config.key}") for i, b in enumerate(bots)}
+    by_key = {b.config.key: b for b in bots}
+    rail = [(b.config.key, getattr(b.config, "name", b.config.key), prefixes[b.config.key]) for b in bots]
+    bot = _CurrentBot()
 
     @web.middleware
     async def guard(request: web.Request, handler):
+        m = re.match(r"^/b/([a-z0-9_]+)(?=/|$)", request.path)
+        current = by_key.get(m.group(1)) if m else bots[0]
+        if current is None:
+            raise web.HTTPNotFound()
+        prefix = prefixes[current.config.key]
+        CURRENT.set(current)
+        NAV.set({"prefix": prefix, "bots": rail, "key": current.config.key,
+                 "name": getattr(current.config, "name", current.config.key)})
+        try:
+            return await guarded(request, handler)
+        except web.HTTPRedirection as e:
+            # 程式裡寫的是 /rules 這種網址，在別的 bot 底下要加上 /b/<代號>
+            loc = str(e.location)
+            if prefix and loc.startswith("/") and not loc.startswith(prefix + "/"):
+                raise type(e)(prefix + loc)
+            raise
+
+    async def guarded(request: web.Request, handler):
         if cfg.admin_email:
             email = request.headers.get("Cf-Access-Authenticated-User-Email", "").lower()
             if email != cfg.admin_email:
@@ -112,11 +246,11 @@ def make_app(bot) -> web.Application:
             out[i] = u.display_name if u else str(i)
         return out
 
-    def form_page(kind: str, flash: str = "", error: bool = False):
+    def form_page(kind: str, flash: str = "", error: bool = False, extra: str = ""):
         title, groups, path = PAGES[kind]
         s = bot.store.settings()
-        intro = REPLY_HELP if kind == "replies" else food_summary(s) if kind == "food" else ""
-        return page(title, kind, intro + render_form(s, groups, path, kind == "settings", tall=kind == "food"),
+        intro = {"replies": REPLY_HELP, "food": food_summary(s), "reactions": REACTION_HELP}.get(kind, "")
+        return page(title, kind, intro + render_form(s, groups, path, kind == "settings", tall=kind == "food") + extra,
                     flash, error)
 
     def food_summary(s: dict) -> str:
@@ -139,7 +273,20 @@ def make_app(bot) -> web.Application:
         return form_page("settings", msg)
 
     async def replies_page(request: web.Request):
-        return form_page("replies", "✅ 已儲存" if request.query.get("ok") else "")
+        q = request.query
+        flash = escape(q.get("err", "")) or (f"✅ 上傳了 {escape(q['ok'])} 張" if q.get("ok", "").isdigit()
+                                             else "✅ 已儲存" if q.get("ok") else "")
+        imgs, warn = images_sections()
+        return form_page("replies", flash or warn, bool(q.get("err")), extra=imgs)
+
+    async def reactions_page(request: web.Request):
+        return form_page("reactions", "✅ 已儲存" if request.query.get("ok") else "")
+
+    async def save_reactions(request):
+        return await save(request, "reactions")
+
+    async def reset_reactions(request):
+        return await reset(request, "reactions")
 
     async def save(request: web.Request, kind: str):
         form = await request.post()
@@ -307,33 +454,34 @@ def make_app(bot) -> web.Application:
                        f"<tr><th>規則</th><th>說明</th><th>關鍵字</th></tr>{rows}</table></div></section>")
         return page("判斷", "logic", "".join(out))
 
-    img_root = images.folder(cfg.db_path)
+    def img_root():
+        return images.folder(bot.config.db_path)
 
-    async def images_page(request: web.Request):
+    def images_sections() -> tuple[str, str]:
+        """預設回覆頁下面的圖庫（打招呼、稀有招呼、Stark says）。回 (html, 檔案不見的提醒)。"""
         s = bot.store.settings()
-        flash = escape(request.query.get("err", ""))
-        if request.query.get("ok"):
-            flash = f"✅ 上傳了 {escape(request.query['ok'])} 張"
-        out = [f"<p class='tag'>打招呼時從對應的分組隨機挑一張附上，附圖機率 {escape(str(s['greet_image_percent']))}%"
-               "，在「設定 → 叫它」改。稀有招呼沒放圖就不附。<br>每張圖下面的代碼（例如 {圖:3}）按一下就複製，"
-               "貼到回覆或規則的句子後面，那句就一定配那張圖。</p>"]
-        lost = sum(1 for g in images.GROUPS for n in bot.core.images(g) if not images.path_of(img_root, f"{g}/{n}"))
-        if lost and not flash:
-            flash = (f"⚠️ 有 {lost} 張圖的檔案不見了。在那張的位置按「重新上傳」選一張圖就好，"
-                     "代碼不變，回覆裡的 {圖:代碼} 不用改。")
+        out = [f"<p class='tag' id='images'>圖片：打招呼時從對應的分組隨機挑一張附上，附圖機率 "
+               f"{escape(str(s['greet_image_percent']))}%，在「設定 → 叫它」改。稀有招呼沒放圖就不附。"
+               "每張圖下面的代碼（例如 {圖:3}）按一下就複製，貼到回覆句子後面，那句就一定配那張圖。</p>"]
+        lost = sum(1 for g in images.GROUPS for n in bot.core.images(g) if not images.path_of(img_root(), f"{g}/{n}"))
+        warn = (f"⚠️ 有 {lost} 張圖的檔案不見了。在那張的位置按「重新上傳」選一張圖就好，"
+                "代碼不變，回覆裡的 {圖:代碼} 不用改。") if lost else ""
         for g, gname in images.GROUPS.items():
             names = bot.core.images(g)
             empty = ("<p class='tag'>沒放圖時用這張預設的：</p><div class='gallery'><figure>"
                      "<img src='/images/builtin/stark.png' alt=''></figure></div>") if g == "stark" else ""
-            out.append(f"<section><h2>{gname}（{len(names)} 張）</h2>{gallery(g, names, '')}"
+            out.append(f"<section id='img-{g}'><h2>🖼️ 圖片：{gname}（{len(names)} 張）</h2>{gallery(g, names, '')}"
                        f"{'' if names else empty}</section>")
-        return page("圖片", "images", "".join(out), flash, error=bool(request.query.get("err")))
+        return "".join(out), warn
+
+    async def images_page(request: web.Request):
+        raise web.HTTPSeeOther("/replies?" + request.query_string + "#images")
 
     def gallery(group: str, names: list[str], back: str) -> str:
         q = f"?back={back}" if back else ""
         def tile(n: str) -> str:
             en = escape(n, quote=True)
-            if images.path_of(img_root, f"{group}/{n}"):
+            if images.path_of(img_root(), f"{group}/{n}"):
                 pic = f"<img src='/images/{group}/{en}' loading='lazy' alt=''>"
             else:       # 檔案不見了：原位置重新上傳，代碼不變
                 pic = (f"<form class='lost' method='post' action='/images/{group}/{en}/replace{q}' "
@@ -354,10 +502,10 @@ def make_app(bot) -> web.Application:
     def back_to(request: web.Request, group: str, query: str) -> str:
         if request.query.get("back") == "rules":
             return f"/rules?{query}#{group}"
-        return f"/images?{query}"
+        return f"/replies?{query}#img-{group}"
 
     async def image_file(request: web.Request):
-        p = images.path_of(img_root, f"{request.match_info['group']}/{request.match_info['name']}")
+        p = images.path_of(img_root(), f"{request.match_info['group']}/{request.match_info['name']}")
         if not p:
             raise web.HTTPNotFound()
         return web.FileResponse(p, headers={"Content-Type": images.TYPES.get(p.suffix, "application/octet-stream")})
@@ -373,7 +521,7 @@ def make_app(bot) -> web.Application:
                 continue
             data = await part.read(decode=False)
             try:
-                added.append(images.save(img_root, group, bytes(data)))
+                added.append(images.save(img_root(), group, bytes(data)))
             except ValueError as e:
                 errors.append(f"{part.filename}：{e}")
         if added:
@@ -390,11 +538,11 @@ def make_app(bot) -> web.Application:
         part = await reader.next()
         try:
             data = bytes(await part.read(decode=False)) if part is not None else b""
-            new = images.save(img_root, group, data, stem=name.rsplit(".", 1)[0])
+            new = images.save(img_root(), group, data, stem=name.rsplit(".", 1)[0])
         except ValueError as e:
             raise web.HTTPSeeOther(back_to(request, group, urlencode({"err": f"沒存到：{e}"})))
         if new != name:
-            images.delete(img_root, group, name)
+            images.delete(img_root(), group, name)
             bot.core.replace_image(group, name, new)
         raise web.HTTPSeeOther(back_to(request, group, "ok=1"))
 
@@ -402,7 +550,7 @@ def make_app(bot) -> web.Application:
         group, name = request.match_info["group"], request.match_info["name"]
         if not images.valid_group(group):
             raise web.HTTPNotFound()
-        images.delete(img_root, group, name)
+        images.delete(img_root(), group, name)
         bot.core.set_images(group, [n for n in bot.core.images(group) if n != name])
         raise web.HTTPSeeOther(back_to(request, group, ""))
 
@@ -460,11 +608,11 @@ def make_app(bot) -> web.Application:
                 f"<form method='post' action='/rules/{r['id']}/delete' style='margin-top:10px' "
                 f"onsubmit=\"return confirm('刪掉這條規則和它的圖？')\"><button class='ghost small'>刪除這條規則</button></form>"
                 f"</details></li>")
-        out.append(f"<section><h2>規則（{len(all_rules)} 條）<span class='toast' id='rtoast'></span></h2>"
+        out.append(f"<section><h2>自訂回覆（{len(all_rules)} 條）<span class='toast' id='rtoast'></span></h2>"
                    + (f"<ol class='rulelist' id='rulelist'>{''.join(items)}</ol>" if items
                       else "<p class='tag'>還沒有規則</p>") + "</section>")
         out.append(RULES_JS)
-        return page("規則", "rules", "".join(out), flash, error)
+        return page("自訂回覆", "rules", "".join(out), flash, error)
 
     async def rules_get(request: web.Request):
         return await rules_page(request)
@@ -495,7 +643,7 @@ def make_app(bot) -> web.Application:
     async def rule_delete(request: web.Request):
         rid = int(request.match_info["id"])
         rules.save(bot.store, [r for r in rules.load(bot.store) if r["id"] != rid])
-        images.delete_group(img_root, f"r{rid}")
+        images.delete_group(img_root(), f"r{rid}")
         bot.core.set_images(f"r{rid}", [])
         raise web.HTTPSeeOther("/rules?ok=1")
 
@@ -571,11 +719,21 @@ def make_app(bot) -> web.Application:
             raise web.HTTPSeeOther("/update?busy=1")
         raise web.HTTPSeeOther("/update")
 
+    async def update_json(request: web.Request):
+        """右上角的一鍵更新按鈕用：現在版本、GitHub 最新版本、是不是在更新中、上次結果。"""
+        cur, st = updater.version(data) or {}, updater.status(data) or {}
+        new = await updater.latest(cur.get("remote", ""), cur.get("branch", "main")) if cur else None
+        return web.json_response({
+            "current": cur.get("short"), "latest": new["short"] if new else None,
+            "newer": bool(new and cur.get("commit") and new["commit"] != cur["commit"]),
+            "running": updater.running(data), "last_ok": st.get("ok"), "last": st.get("message")})
+
     async def health(request: web.Request):
-        return web.json_response({"ok": True, "discord_ready": bot.is_ready()})
+        return web.json_response({"ok": True, "discord_ready": bots[0].is_ready(),
+                                  "bots": {b.config.key: b.is_ready() for b in bots}})
 
     app = web.Application(middlewares=[guard], client_max_size=80 * 1024 * 1024)
-    app.add_routes([
+    routes = [
         web.get("/", settings_page), web.post("/", save_settings), web.post("/reset", reset_settings),
         web.get("/food", food_page), web.post("/food", save_food), web.post("/food/reset", reset_food),
         web.get("/replies", replies_page), web.post("/replies", save_replies), web.post("/replies/reset", reset_replies),
@@ -590,20 +748,28 @@ def make_app(bot) -> web.Application:
         web.get("/images", images_page), web.post(r"/images/{group}/upload", image_upload),
         web.get(r"/images/{group}/{name}", image_file), web.post(r"/images/{group}/{name}/delete", image_delete),
         web.post(r"/images/{group}/{name}/replace", image_replace),
-        web.get("/logic", logic_page), web.get("/update", update_page), web.post("/update", update_start), web.get("/healthz", health),
-    ])
+        web.get("/logic", logic_page), web.get("/update", update_page), web.post("/update", update_start),
+        web.get("/update.json", update_json), web.get("/reactions", reactions_page), web.post("/reactions", save_reactions),
+        web.post("/reactions/reset", reset_reactions),
+    ]
+    for pre in prefixes.values():
+        for r in routes:
+            app.router.add_route(r.method, (pre + r.path) if r.path != "/" else (pre + "/" if pre else "/"), r.handler)
+    app.router.add_get("/healthz", health)
+
     return app
 
 
 REPLY_HELP = ("<p class='tag'>一行一句，隨機挑一句回。想回多行的話用 \" \" 把那句包起來，中間可以換行。"
-              "句子後面加 {圖:代碼} 就一定附那張圖，代碼在「圖片」或「規則」頁的圖下面；加 {圖:無} 就這句不附圖。</p>")
+              "句子後面加 {圖:代碼} 就一定附那張圖，代碼在這頁下面或自訂回覆的圖下面；加 {圖:無} 就這句不附圖。</p>")
 
 
 RULES_JS = """<script>
 (() => {
   const list = document.getElementById("rulelist"), toast = document.getElementById("rtoast");
   const say = t => { if (toast) { toast.textContent = t; setTimeout(() => { toast.textContent = ""; }, 2000); } };
-  const post = (url, data) => fetch(url, {method: "POST", body: new URLSearchParams(data)})
+  const B = document.body.dataset.base || "";
+  const post = (url, data) => fetch(B + url, {method: "POST", body: new URLSearchParams(data)})
     .then(r => { if (!r.ok) throw new Error(r.status); });
   const hash = location.hash && document.querySelector(location.hash + " > details");
   if (hash) hash.open = true;
@@ -639,9 +805,11 @@ RULES_JS = """<script>
 })();
 </script>"""
 
-PAGES = {"settings": ("設定", GROUPS, "/"), "replies": ("回覆", REPLY_GROUPS, "/replies"),
-         "food": ("吃什麼", FOOD_GROUPS, "/food")}
-KEYS = {"settings": SETTING_KEYS, "replies": REPLY_KEYS, "food": FOOD_KEYS}
+PAGES = {"settings": ("設定", GROUPS, "/"), "replies": ("預設回覆", REPLY_GROUPS, "/replies"),
+         "food": ("吃什麼", FOOD_GROUPS, "/food"), "reactions": ("表情符號", REACTION_GROUPS, "/reactions")}
+KEYS = {"settings": SETTING_KEYS, "replies": REPLY_KEYS, "food": FOOD_KEYS, "reactions": REACTION_KEYS}
+REACTION_HELP = ("<p class='tag'>看到關鍵字就幫那則訊息按表符，不管有沒有叫它。一行一組「關鍵字/關鍵字｜表符 表符」，"
+                 "[ ] 裡的字任一個都算，例如 [雞機][吧巴]；表符寫 :名稱: 或直接放 emoji。比對前會去掉空白和標點。</p>")
 
 
 def render_form(s: dict, groups, path: str, tools: bool, tall: bool = False) -> str:
@@ -674,10 +842,12 @@ def render_form(s: dict, groups, path: str, tools: bool, tall: bool = False) -> 
     return "".join(out)
 
 
-async def start_web(bot) -> web.AppRunner:
-    runner = web.AppRunner(make_app(bot), access_log=None)
+async def start_web(bots) -> web.AppRunner:
+    bots = list(bots) if isinstance(bots, (list, tuple)) else [bots]
+    cfg = bots[0].config
+    runner = web.AppRunner(make_app(bots), access_log=None)
     await runner.setup()
-    site = web.TCPSite(runner, bot.config.web_host, bot.config.web_port)
+    site = web.TCPSite(runner, cfg.web_host, cfg.web_port)
     await site.start()
-    log.info("設定網頁：http://%s:%s", bot.config.web_host, bot.config.web_port)
+    log.info("設定網頁：http://%s:%s", cfg.web_host, cfg.web_port)
     return runner

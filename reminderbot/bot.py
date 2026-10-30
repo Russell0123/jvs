@@ -14,6 +14,7 @@ from discord.ext import tasks
 from . import images, weather
 from .config import Config
 from .core import Assistant, Button, Edit, Incoming, NeedWeather, Purge, React, Send, User
+from .settings import seed_profile
 from .store import SqliteStore
 
 log = logging.getLogger(__name__)
@@ -140,9 +141,10 @@ class ReminderBot(discord.Client):
         self.config = config
         self.tz = config.tz
         self.store = SqliteStore(config.db_path)
+        seed_profile(self.store, config.key)
         self.core = Assistant(self.store, self.tz, owner_id=config.owner_id,
                               home_channel_id=config.reminder_channel_id)
-        self.web_runner = None
+        self.core.migrate()
         self._tasks: set = set()         # 背景的天氣查詢
         self._monitoring = False         # 天氣變化檢查還在跑就不重複開
         self._purging: set[int] = set()  # 正在刪訊息的頻道
@@ -153,19 +155,15 @@ class ReminderBot(discord.Client):
     async def setup_hook(self):
         self.add_dynamic_items(CoreButton)
         self._setup_commands()
-        from .web import start_web
-        self.web_runner = await start_web(self)
         self.tick.start()
 
     async def close(self):
+        """資料庫留著：設定網頁還要用，整支程式結束時才關（__main__）。"""
         self.tick.cancel()
-        if self.web_runner:
-            await self.web_runner.cleanup()
-        self.store.close()
         await super().close()
 
     async def on_ready(self):
-        log.info("已登入：%s，服務頻道：%s", self.user, self.config.channel_ids)
+        log.info("%s 已登入：%s，服務頻道：%s", self.config.name, self.user, self.config.channel_ids)
         # / 指令註冊到每個伺服器（全域註冊要等很久才生效）
         for guild in self.guilds:
             try:
@@ -177,6 +175,8 @@ class ReminderBot(discord.Client):
     # ---------- / 指令 ----------
     def _setup_commands(self):
         self.tree = app_commands.CommandTree(self)
+        if not self.config.slash:
+            return          # 這個 bot 先不開 / 指令（登入時會把舊的清掉）
 
         @self.tree.command(name="說明", description="看賈維斯會做什麼")
         async def help_cmd(interaction: discord.Interaction):
