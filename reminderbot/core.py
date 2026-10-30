@@ -66,6 +66,7 @@ class Incoming:
     mention_role_ids: list[int] = field(default_factory=list)   # 不含 bot 自己的身分組
     reply_to_bot_message_id: int | None = None  # 回覆的是 bot 的哪則訊息
     mentioned: bool = True                      # 有沒有 @ bot；沒有的話只聽願望（而且只聽指定的人）
+    at: bool = False                            # 真的打了 @它（不含「回覆它的訊息」）
 
 
 @dataclass
@@ -141,6 +142,14 @@ class Handoff:
     message_id: int
     text: str
     to: str = "jvs"
+
+
+@dataclass
+class PeerSay:
+    """請另一個 bot（賈維斯）在它自己的提醒頻道講一句話。"""
+    text: str
+    to: str = "jvs"
+    ping_owner: bool = True
 
 
 @dataclass
@@ -308,6 +317,8 @@ class Assistant:
             return []
         if s["persona"] == "relay":
             return self._relay(msg, now, s)
+        if s["persona"] == "gallery":
+            return self._gallery(msg, now, s)
         reacts = self.reactions(msg, s) + self._rename(msg, s)
         if echo := self._parrot(msg, s):
             if s["echo_mode"] != "add":
@@ -353,6 +364,45 @@ class Assistant:
         said = m.group(2).strip()
         self.last_intent = Intent("echo", text=said)
         return [Send(msg.channel_id, said[:2000])]
+
+    # ---------- 圖庫模式（雪豹）----------
+    def _gallery(self, msg: Incoming, now: datetime, s: dict) -> list:
+        """被 @ 就照洗好的順序發一張圖＋隨機貓咪顏文字；整輪發完時請賈維斯跟主人說一聲。"""
+        self.last_intent = None
+        if not msg.at:
+            return []
+        rng = random.Random(msg.message_id or int(now.timestamp()))
+        face = self.phrase(s, "kaomoji_phrases", rng)
+        name, cycle_done = self.next_pic(rng)
+        self.last_intent = Intent("gallery", text=name or "")
+        out = self._reply(msg, face)
+        out[0].image = f"pics/{name}" if name else ""
+        if cycle_done:
+            out.append(PeerSay(self.phrase(s, "stock_phrases", rng)))
+        return out
+
+    def next_pic(self, rng) -> tuple[str | None, bool]:
+        """假隨機：把圖庫洗牌成一輪，照順序發，同一輪不重複；每輪順序都不一樣。回 (檔名, 這張是不是這輪最後一張)。"""
+        imgs = self.images("pics")
+        if not imgs:
+            return None, False
+        bag = self.store.get_meta("pic_bag") or {}
+        cycle, left = bag.get("cycle", []), [n for n in bag.get("left", []) if n in imgs]
+        new = [n for n in imgs if n not in cycle]                     # 這輪中途新上傳的：隨機插進還沒發的裡面
+        for n in new:
+            left.insert(rng.randint(0, len(left)), n)
+        cycle = cycle + new
+        if not left:                                                  # 新的一輪：重新洗牌，順序跟上一輪不一樣
+            order = imgs[:]
+            for _ in range(10):
+                rng.shuffle(order)
+                if len(order) < 2 or (order != bag.get("cycle") and order[0] != bag.get("last")):
+                    break
+            cycle, left = order, order[:]
+        name = left.pop(0)
+        self.store.set_meta("pic_bag", {"cycle": cycle, "left": left, "last": name,
+                                        "rounds": bag.get("rounds", 0) + (0 if left else 1)})
+        return name, not left
 
     def _relay(self, msg: Incoming, now: datetime, s: dict) -> list:
         """只做：自動按表符、改暱稱、自訂回覆、打招呼；叫它交代賈維斯會的事 → 回一句官腔再 @賈維斯，讓賈維斯接手。"""
@@ -1324,7 +1374,7 @@ class Assistant:
 
     def tick(self, now: datetime, default_channel_id: int | None = None) -> list:
         s = self.store.settings()
-        if not s["respond"] or s["persona"] == "relay":
+        if not s["respond"] or s["persona"] != "assistant":
             return []
         ts = int(now.timestamp())
         rng = random.Random(ts)

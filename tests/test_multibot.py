@@ -382,7 +382,7 @@ def test_task_words():
         for who in (ME, ming):                                         # 做不到：誰叫都拒絕
             [r] = jvs.handle(Incoming(who, t, 1, 10 + i, mentioned=False), NOW + timedelta(minutes=i))
             assert r.text in pool and jvs.last_intent.kind == "cannot", t
-    out = jvs.handle(Incoming(ME, "賈維斯 能不能明天下午3點提醒我交報告", 1, 20, mentioned=False), NOW)
+    jvs.handle(Incoming(ME, "賈維斯 能不能明天下午3點提醒我交報告", 1, 20, mentioned=False), NOW)
     assert jvs.store.user_reminders(7)                                 # 做得到就照做
     assert jvs.handle(Incoming(ME, "幫我寫作業", 1, 21, mentioned=False), NOW) == []   # 沒叫它不管
     # 蔣寶：「幫我…」也轉給賈維斯，{任務} 變成「這件事」

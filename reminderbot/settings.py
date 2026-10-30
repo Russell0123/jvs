@@ -9,7 +9,7 @@ from .food import DEFAULT_LIBRARY, DEFAULT_QUESTIONS
 DEFAULTS: dict = {
     # 功能開關
     "respond": True,                 # 總開關：關掉就完全不理人（不回話、不按表符、不發天氣）
-    "persona": "assistant",          # assistant = 賈維斯那套；relay = 只做自訂回覆、表符、改暱稱，交代事情轉給賈維斯
+    "persona": "assistant",          # assistant = 賈維斯那套；relay = 蔣寶（轉介）；gallery = 雪豹（被 @ 就發一張圖）
     # 叫它時講到關鍵字就改自己的暱稱：一行一組「關鍵字/關鍵字｜暱稱/暱稱」（多個暱稱隨機挑，寫「原名」就改回來）
     "nick_rules": "",
     "echo_enabled": False,           # 應聲蟲：「<叫它的名字>說…」就把後面的內容講一次
@@ -64,6 +64,9 @@ DEFAULTS: dict = {
                        "去年六月我們已建請中央協助處理，中央冷處理至今——希望中央地方一起合作，不要讓地方孤軍奮戰。\n"
                        "請市民朋友放心，我們會盡速處理，積極回應各界關切，讓台北成為一座讓所有人驕傲的城市\n"
                        "對於任務一事，我非常重視，也高度關切。",
+    "kaomoji_phrases": "(=^･ω･^=)\n(=①ω①=)\n(^・ω・^ )\nฅ^•ﻌ•^ฅ\n(=ↀωↀ=)\n(ﾐゝᆺ・ﾐ)\n/ᐠ｡ꞈ｡ᐟ\\\n(=´ᆺ`=)\n"
+                       "ฅ(´・ω・`)ฅ\n(ΦωΦ)\n(=ＴェＴ=)\n(^・x・^)\n(=｀ω´=)\n/ᐠ - ˕ -マ\n(=^ ◡ ^=)",
+    "stock_phrases": "雪豹庫存不夠了",
     "yesno_phrases": "要\n要啊\n當然要\n再考慮看看\n先不要\n不要好了",
     "greet_phrases": "嘿\n提到我嗎？\n？\n您好\n咪嗚\n{時段}，{名字}\n{時段}～外面{天氣}",
     "greet_rare_phrases": "史塔克的肛門",
@@ -164,6 +167,8 @@ LABELS = {
     "task_words": "交代事情的詞：叫它時有這些詞就算要它做事，賈維斯做不到會拒絕，蔣寶會轉給賈維斯。用 / 分開",
     "yesno_patterns": "問要不要：符合這些句型就隨機回，* 代表中間任何字，用 / 分開",
     "yesno_phrases": "問要不要的回答",
+    "kaomoji_phrases": "每張圖附的貓咪顏文字，一行一個隨機挑",
+    "stock_phrases": "圖庫整輪都發過一次時，賈維斯在它的提醒頻道跟主人講的話",
     "handoff_phrases": "被叫去做賈維斯會的事時回的話，後面會自動 @賈維斯，然後賈維斯接手。可以用 {任務}，例如「提醒」「天氣」",
     "echo_mode": "應聲之後",
     "listen_bots": "另一個 bot 講的話也會觸發（只接一層，不會互相接龍）",
@@ -264,6 +269,8 @@ REACTION_KEYS = ["auto_reactions"]
 RELAY_SETTING_GROUPS = [("功能", ["respond", "all_channels", "listen_bots", "self_loop"]),
                         ("叫它", ["bot_names", "greet_words", "greet_rare_percent", "greet_image_percent", "task_words"]),
                         ("改暱稱", ["nick_rules"]), ("應聲蟲", ["echo_enabled", "echo_mode"])]
+GALLERY_SETTING_GROUPS = [("功能", ["respond", "all_channels"])]
+GALLERY_REPLY_GROUPS = [("顏文字", ["kaomoji_phrases"]), ("圖庫整輪發完", ["stock_phrases"])]
 RELAY_REPLY_GROUPS = [("轉給賈維斯", ["handoff_phrases"]), ("打招呼", ["greet_phrases", "greet_rare_phrases"])]
 NICK_GROUP = ("改暱稱", ["nick_rules"])
 REPLY_KEYS = [k for _, keys in REPLY_GROUPS for k in keys]
@@ -374,6 +381,10 @@ def _lines(raw) -> list[tuple[str, list[str]]]:
 # 各個 bot 第一次啟動時的設定（之後在網頁改）。蔣寶先完全不反應，功能之後再開。
 # 每個 bot 依序套用，套過的不會再套（之後加新的一步，舊資料也會補上）。
 PROFILE_SEEDS: dict[str, list[dict]] = {
+    "snow": [
+        {"persona": "gallery", "respond": True, "bot_names": "", "auto_reactions": "", "weather_daily_enabled": False,
+         "weather_alert_enabled": False, "passive_ack": False, "feature_reminder": False, "feature_note": False},
+    ],
     "jbao": [
         {"respond": False, "bot_names": "蔣寶,jbao", "auto_reactions": "", "weather_daily_enabled": False,
          "weather_alert_enabled": False, "passive_ack": False},
@@ -435,7 +446,7 @@ def validate(form: dict, keys=None) -> tuple[dict, list[str]]:
                 errors.append(f"{k} 格式要像 07:30")
                 out[k] = default
         elif k == "persona":
-            out[k] = raw if raw in ("assistant", "relay") else default
+            out[k] = raw if raw in ("assistant", "relay", "gallery") else default
         elif k == "echo_mode":
             out[k] = raw if raw in ("replace", "add") else default
         elif k == "weather_slot_day":

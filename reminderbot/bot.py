@@ -16,7 +16,7 @@ from discord.ext import tasks
 from . import images, weather
 from .emojis import unicode_emoji
 from .config import Config
-from .core import Assistant, Button, Edit, Handoff, Incoming, NeedWeather, Purge, React, Rename, Send, User
+from .core import Assistant, Button, Edit, Handoff, Incoming, NeedWeather, PeerSay, Purge, React, Rename, Send, User
 from .rules import seed_rules
 from .settings import seed_profile
 from .store import SqliteStore
@@ -323,6 +323,12 @@ class ReminderBot(discord.Client):
         except Exception:
             log.exception("接手訊息失敗：%s", text)
 
+    async def say_home(self, text: str, ping_owner: bool = True):
+        """在自己的提醒頻道講一句（別的 bot 請它代為通知主人用）。"""
+        owner = self.config.owner_id
+        await self._send(Send(self.config.reminder_channel_id,
+                              f"<@{owner}> {text}" if ping_owner and owner else text, ping=ping_owner), None)
+
     async def _handoff(self, a: Handoff, source: discord.Message | None):
         peer = self.peers.get(a.to)
         if peer is not None and source is not None:
@@ -374,7 +380,9 @@ class ReminderBot(discord.Client):
             mention_user_ids=[u.id for u in message.mentions if u.id != self.user.id and not u.bot],
             mention_role_ids=[r.id for r in message.role_mentions if not self._is_my_role(r)],
             reply_to_bot_message_id=replied,
-            mentioned=mentioned)
+            mentioned=mentioned,
+            at=f"<@{self.user.id}>" in message.content or f"<@!{self.user.id}>" in message.content
+            or any(self._is_my_role(r) for r in message.role_mentions))
         try:
             await self.run_actions(self.core.handle(incoming, self.now()), source=message)
         except Exception:
@@ -512,6 +520,10 @@ class ReminderBot(discord.Client):
                     await self._rename(a, source)
                 elif isinstance(a, Handoff):
                     await self._handoff(a, source)
+                elif isinstance(a, PeerSay):
+                    peer = self.peers.get(a.to)
+                    if peer is not None and peer.is_ready():
+                        await peer.say_home(a.text, a.ping_owner)
             except discord.HTTPException:
                 log.exception("動作失敗：%s", a)
 

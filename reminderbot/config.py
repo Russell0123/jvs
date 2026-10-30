@@ -38,7 +38,7 @@ class Config:
 
 
 # 其他 bot：.env 填了 <代號>_DISCORD_TOKEN 就會一起跑，資料庫、圖庫、設定各自分開
-OTHER_BOTS = [("jbao", "蔣寶")]
+OTHER_BOTS = [("jbao", "蔣寶"), ("snow", "雪豹")]
 
 
 def load() -> Config:

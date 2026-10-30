@@ -6,7 +6,7 @@ import secrets
 import time
 from pathlib import Path
 
-GROUPS = {"greet": "一般招呼", "rare": "稀有招呼", "stark": "Stark says"}   # 另外每條自訂規則有自己的 r{編號}
+GROUPS = {"greet": "一般招呼", "rare": "稀有招呼", "stark": "Stark says", "pics": "圖庫"}   # 另外每條自訂規則有自己的 r{編號}
 BUILTIN = Path(__file__).parent / "assets"
 MAX_BYTES = 8 * 1024 * 1024                      # Discord 沒有 Nitro 的上傳上限是 10MB，留點空間
 SIGNATURES = {b"\x89PNG": ".png", b"\xff\xd8\xff": ".jpg", b"GIF8": ".gif", b"RIFF": ".webp"}
@@ -64,6 +64,14 @@ def delete(root: Path, group: str, name: str):
     p = path_of(root, f"{group}/{name}")
     if p and group != "builtin":
         p.unlink()
+
+
+def clear_group(root: Path, group: str):
+    """刪掉這個分組的所有圖（資料夾留著）。"""
+    if valid_group(group) and (root / group).is_dir():
+        for p in (root / group).iterdir():
+            if p.is_file():
+                p.unlink()
 
 
 def delete_group(root: Path, group: str):

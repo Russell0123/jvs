@@ -90,7 +90,7 @@ def describe(it, tz) -> dict | None:
     names = {"help": "說明", "reminder": "提醒", "timer": "計時", "note": "記事", "wish": "記願望", "suggest": "從清單挑",
              "weather": "天氣", "list": "查詢", "cancel": "取消提醒", "delete_note": "刪除記事",
              "cancel_match": "用內容取消", "snooze": "延後", "payday_set": "設定發薪日", "unknown": "聽不懂",
-             "greet": "打招呼", "refuse": "拒絕", "rule": "自訂規則", "location": "改地點", "purge": "刪訊息", "yesno": "問要不要", "food": "吃什麼", "handoff": "轉給賈維斯", "echo": "應聲蟲", "cannot": "做不到"}
+             "greet": "打招呼", "refuse": "拒絕", "rule": "自訂規則", "location": "改地點", "purge": "刪訊息", "yesno": "問要不要", "food": "吃什麼", "handoff": "轉給賈維斯", "echo": "應聲蟲", "cannot": "做不到", "gallery": "發圖"}
     parts = []
     if it.topic:
         parts.append(f"常見提醒：{it.topic}")

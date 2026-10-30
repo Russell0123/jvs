@@ -17,7 +17,7 @@ from .explain import describe, rules as logic_rules
 from .core import IMG_TOKEN, NO_IMAGE
 from .router import route
 from .settings import (COUNTIES, DEFAULTS, FOOD_GROUPS, FOOD_KEYS, GROUPS, LABELS, MULTILINE_KEYS, REACTION_GROUPS,
-                       REACTION_KEYS, RELAY_REPLY_GROUPS, RELAY_SETTING_GROUPS, REPLY_GROUPS, REPLY_KEYS, SETTING_KEYS,
+                       REACTION_KEYS, RELAY_REPLY_GROUPS, RELAY_SETTING_GROUPS, GALLERY_REPLY_GROUPS, GALLERY_SETTING_GROUPS, REPLY_GROUPS, REPLY_KEYS, SETTING_KEYS,
                        note_categories, validate, wish_lists)
 
 log = logging.getLogger(__name__)
@@ -91,6 +91,8 @@ code{background:var(--input);border-radius:4px;padding:1px 5px;font-size:13px}
 .rulelist .rtoggle{margin-top:3px;flex:none}.rulelist details{flex:1;min-width:0}.rulelist summary{cursor:pointer;line-height:1.5;color:var(--head)}
 .rulelist summary .kw{color:var(--link);margin-left:6px;font-size:14px;overflow-wrap:anywhere}.rulelist summary .tag{display:block}
 .newrule summary{cursor:pointer;font-weight:600;color:var(--head)}.toast{font-size:13px;color:var(--ok);margin-left:10px;font-weight:400}
+label.upload{display:inline-block;margin:0;cursor:pointer;background:#4e5058;color:#fff;border-radius:4px;padding:3px 10px;font-size:13px;font-weight:500}
+label.upload:hover{background:#6d6f78}
 .badge{background:var(--ok);color:#fff;border-radius:4px;padding:1px 8px;font-size:12px;font-weight:600}
 pre.log{white-space:pre-wrap;font-size:12px;background:var(--input);border-radius:6px;padding:8px;max-height:320px;overflow:auto}
 details>summary{list-style:none}details>summary::-webkit-details-marker{display:none}
@@ -112,7 +114,8 @@ NAV_ITEMS = [("記憶", [("reminders", "/reminders", "提醒"), ("notes", "/note
                      ("reactions", "/reactions", "表情符號")]),
              ("設定", [("settings", "/", "設定"), ("logic", "/logic", "判斷")])]
 
-RELAY_PAGES = {"replies", "rules", "reactions", "settings"}     # 蔣寶這種轉介模式只用到這些
+# 蔣寶（轉介）、雪豹（圖庫）只用到這些頁
+PERSONA_PAGES = {"relay": {"replies", "rules", "reactions", "settings"}, "gallery": {"replies", "settings"}}
 
 PAGE_JS = """<script>
 (() => {
@@ -156,7 +159,7 @@ def page(title: str, active: str, body: str, flash: str = "", error: bool = Fals
     prefix = nav["prefix"]
     rail = "".join(f"<a href='{pre or ''}/' class='{'on' if key == nav['key'] else ''}' title='{escape(name)}'>"
                    f"{escape(name[:1])}</a>" for key, name, pre in nav["bots"]) or "<a class='on'>賈</a>"
-    shown = RELAY_PAGES if nav.get("persona") == "relay" else None
+    shown = PERSONA_PAGES.get(nav.get("persona"))
     side = "".join(f"<div class='cat'>{cat}</div>" + "".join(
         f"<a href='{href}' class='{'on' if key == active else ''}'>{name}</a>" for key, href, name in items
         if shown is None or key in shown)
@@ -255,15 +258,17 @@ def make_app(bots) -> web.Application:
             out[i] = u.display_name if u else bot.store.get_meta(f"uname:{i}") or str(i)
         return out
 
-    def relay() -> bool:
-        return bot.store.settings().get("persona") == "relay"
+    def persona_forms() -> dict:
+        return PERSONA_FORMS.get(bot.store.settings().get("persona"), {})
 
     def form_page(kind: str, flash: str = "", error: bool = False, extra: str = ""):
         title, groups, path = PAGES[kind]
         s = bot.store.settings()
-        if relay() and kind in RELAY_FORMS:
-            groups = RELAY_FORMS[kind]
+        if kind in persona_forms():
+            groups = persona_forms()[kind]
         intro = {"replies": REPLY_HELP, "food": food_summary(s), "reactions": REACTION_HELP}.get(kind, "")
+        if s.get("persona") == "gallery":
+            intro = "<p class='tag'>被 @ 才會發圖：照洗好的順序發一張，再附一個隨機顏文字。</p>" if kind == "replies" else ""
         return page(title, kind, intro + render_form(s, groups, path, kind == "settings", tall=kind == "food") + extra,
                     flash, error)
 
@@ -304,7 +309,7 @@ def make_app(bots) -> web.Application:
 
     async def save(request: web.Request, kind: str):
         form = await request.post()
-        keys = [k for _, ks in RELAY_FORMS[kind] for k in ks] if relay() and kind in RELAY_FORMS else KEYS[kind]
+        keys = [k for _, ks in persona_forms()[kind] for k in ks] if kind in persona_forms() else KEYS[kind]
         values, errors = validate(dict(form), keys)
         bot.store.save_settings(values)
         if errors:
@@ -315,7 +320,7 @@ def make_app(bots) -> web.Application:
         raise web.HTTPSeeOther(PAGES[kind][2] + "?ok=saved")
 
     async def reset(request: web.Request, kind: str):
-        keys = [k for _, ks in RELAY_FORMS[kind] for k in ks] if relay() and kind in RELAY_FORMS else KEYS[kind]
+        keys = [k for _, ks in persona_forms()[kind] for k in ks] if kind in persona_forms() else KEYS[kind]
         bot.store.save_settings({k: DEFAULTS[k] for k in keys if k != "respond"})
         raise web.HTTPSeeOther(PAGES[kind][2] + "?ok=saved")
 
@@ -472,9 +477,29 @@ def make_app(bots) -> web.Application:
     def img_root():
         return images.folder(bot.config.db_path)
 
+    def pics_section() -> str:
+        """雪豹的圖庫：可以一次選整個資料夾上傳（一張一張送，有進度），看這一輪還剩幾張。"""
+        names = bot.core.images("pics")
+        bag = bot.store.get_meta("pic_bag") or {}
+        left = len([n for n in bag.get("left", []) if n in names]) if bag else len(names)
+        info = (f"共 {len(names)} 張。這一輪還有 {left} 張沒發過，發完會重新洗牌（順序每輪都不一樣），"
+                f"那時賈維斯會在它的提醒頻道跟你說。已經輪完 {bag.get('rounds', 0)} 輪。") if names else "還沒有圖。"
+        return (f"<section id='img-pics'><h2>🖼️ 圖庫（{len(names)} 張）</h2><p class='tag'>{info}</p>"
+                "<div class='rowform'><label class='ghost small upload'>📁 選資料夾上傳<input type='file' id='folderpick' "
+                "webkitdirectory directory multiple hidden></label>"
+                "<label class='ghost small upload'>選幾張圖<input type='file' id='filepick' multiple "
+                "accept='image/png,image/jpeg,image/gif,image/webp' hidden></label><span class='toast' id='upmsg'></span></div>"
+                "<div class='rowform'><form method='post' action='/images/pics/reshuffle' onsubmit=\"return confirm('重新洗牌，"
+                "從新的一輪開始？')\"><button class='ghost small'>重新洗牌</button></form>"
+                "<form method='post' action='/images/pics/clear' onsubmit=\"return confirm('刪掉圖庫裡全部的圖？')\">"
+                "<button class='small danger'>全部刪除</button></form></div>"
+                + gallery_tiles("pics", names) + "</section>" + FOLDER_JS)
+
     def images_sections() -> tuple[str, str]:
         """預設回覆頁下面的圖庫（打招呼、稀有招呼、Stark says）。回 (html, 檔案不見的提醒)。"""
         s = bot.store.settings()
+        if s.get("persona") == "gallery":
+            return pics_section(), ""
         out = [f"<p class='tag' id='images'>圖片：打招呼時從對應的分組隨機挑一張附上，附圖機率 "
                f"{escape(str(s['greet_image_percent']))}%，在「設定 → 叫它」改。稀有招呼沒放圖就不附。"
                "每張圖下面的代碼（例如 {圖:3}）按一下就複製，貼到回覆句子後面，那句就一定配那張圖。</p>"]
@@ -483,6 +508,8 @@ def make_app(bots) -> web.Application:
                 "代碼不變，回覆裡的 {圖:代碼} 不用改。") if lost else ""
         key = bot.config.key
         for g, gname in images.GROUPS.items():
+            if g == "pics":
+                continue
             names = bot.core.images(g)
             if g == "stark" and key != "jvs":
                 gname = f"{key.capitalize()} says（/{key} says、右鍵選單；沒放圖就不能用）"
@@ -497,6 +524,13 @@ def make_app(bots) -> web.Application:
 
     def gallery(group: str, names: list[str], back: str) -> str:
         q = f"?back={back}" if back else ""
+        return (f"<form class='rowform' method='post' action='/images/{group}/upload{q}' enctype='multipart/form-data'>"
+                f"<input type='file' name='files' accept='image/png,image/jpeg,image/gif,image/webp' multiple required>"
+                f"<button class='small'>上傳</button></form>" + gallery_tiles(group, names, back))
+
+    def gallery_tiles(group: str, names: list[str], back: str = "") -> str:
+        q = f"?back={back}" if back else ""
+
         def tile(n: str) -> str:
             en = escape(n, quote=True)
             if images.path_of(img_root(), f"{group}/{n}"):
@@ -513,9 +547,7 @@ def make_app(bots) -> web.Application:
                     f"<form method='post' action='/images/{group}/{en}/delete{q}' "
                     f"onsubmit=\"return confirm('刪掉這張？')\"><button class='ghost small'>刪除</button></form></figure>")
         tiles = "".join(tile(n) for n in names)
-        return (f"<form class='rowform' method='post' action='/images/{group}/upload{q}' enctype='multipart/form-data'>"
-                f"<input type='file' name='files' accept='image/png,image/jpeg,image/gif,image/webp' multiple required>"
-                f"<button class='small'>上傳</button></form>" + (f"<div class='gallery'>{tiles}</div>" if tiles else ""))
+        return f"<div class='gallery'>{tiles}</div>" if tiles else ""
 
     def back_to(request: web.Request, group: str, query: str) -> str:
         if request.query.get("back") == "rules":
@@ -565,6 +597,21 @@ def make_app(bots) -> web.Application:
             images.delete(img_root(), group, name)
             bot.core.replace_image(group, name, new)
         raise web.HTTPSeeOther(back_to(request, group, "ok=1"))
+
+    async def image_clear(request: web.Request):
+        group = request.match_info["group"]
+        if not images.valid_group(group):
+            raise web.HTTPNotFound()
+        images.clear_group(img_root(), group)
+        bot.core.set_images(group, [])
+        if group == "pics":
+            bot.store.set_meta("pic_bag", None)
+        raise web.HTTPSeeOther(back_to(request, group, "ok=1"))
+
+    async def pics_reshuffle(request: web.Request):
+        bag = bot.store.get_meta("pic_bag") or {}
+        bot.store.set_meta("pic_bag", {**bag, "left": []})          # 下一次發圖就開新的一輪
+        raise web.HTTPSeeOther(back_to(request, "pics", "ok=1"))
 
     async def image_delete(request: web.Request):
         group, name = request.match_info["group"], request.match_info["name"]
@@ -770,6 +817,7 @@ def make_app(bots) -> web.Application:
         web.get("/images", images_page), web.post(r"/images/{group}/upload", image_upload),
         web.get(r"/images/{group}/{name}", image_file), web.post(r"/images/{group}/{name}/delete", image_delete),
         web.post(r"/images/{group}/{name}/replace", image_replace),
+        web.post("/images/pics/reshuffle", pics_reshuffle), web.post(r"/images/{group}/clear", image_clear),
         web.get("/logic", logic_page), web.get("/update", update_page), web.post("/update", update_start),
         web.get("/update.json", update_json), web.get("/reactions", reactions_page), web.post("/reactions", save_reactions),
         web.post("/reactions/reset", reset_reactions),
@@ -829,7 +877,35 @@ RULES_JS = """<script>
 
 PAGES = {"settings": ("設定", GROUPS, "/"), "replies": ("預設回覆", REPLY_GROUPS, "/replies"),
          "food": ("吃什麼", FOOD_GROUPS, "/food"), "reactions": ("表情符號", REACTION_GROUPS, "/reactions")}
-RELAY_FORMS = {"settings": RELAY_SETTING_GROUPS, "replies": RELAY_REPLY_GROUPS}
+FOLDER_JS = """<script>
+(() => {
+  const B = document.body.dataset.base || "", msg = document.getElementById("upmsg");
+  const isImg = f => /\\.(png|jpe?g|gif|webp)$/i.test(f.name);
+  const path = f => f.webkitRelativePath || f.name;
+  async function up(list) {
+    const files = [...list].filter(isImg).sort((a, b) => path(a).localeCompare(path(b), undefined, {numeric: true}));
+    if (!files.length) { msg.textContent = "沒有 png／jpg／gif／webp 圖片"; return; }
+    let done = 0, bad = 0;
+    for (const f of files) {               // 一張一張送：不怕整個資料夾太大
+      const fd = new FormData(); fd.append("files", f, f.name);
+      try {
+        const r = await fetch(B + "/images/pics/upload", {method: "POST", body: fd});
+        if (!r.ok || r.url.includes("err=")) bad++;
+      } catch (e) { bad++; }
+      done++; msg.textContent = `上傳中 ${done}/${files.length}` + (bad ? `，${bad} 張沒成功` : "");
+    }
+    msg.textContent = `上傳完成 ${done - bad} 張` + (bad ? `，${bad} 張沒成功（超過 8MB 或不是圖）` : "");
+    setTimeout(() => location.reload(), 1000);
+  }
+  for (const id of ["folderpick", "filepick"]) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("change", e => up(e.target.files));
+  }
+})();
+</script>"""
+
+PERSONA_FORMS = {"relay": {"settings": RELAY_SETTING_GROUPS, "replies": RELAY_REPLY_GROUPS},
+                 "gallery": {"settings": GALLERY_SETTING_GROUPS, "replies": GALLERY_REPLY_GROUPS}}
 KEYS = {"settings": SETTING_KEYS, "replies": REPLY_KEYS, "food": FOOD_KEYS, "reactions": REACTION_KEYS}
 REACTION_HELP = ("<p class='tag'>看到關鍵字就幫那則訊息按表符，不管有沒有叫它。一行一組「關鍵字/關鍵字｜表符 表符」，"
                  "[ ] 裡的字任一個都算，例如 [雞機][吧巴]；表符寫 :名稱: 或直接放 emoji。比對前會去掉空白和標點。</p>")
